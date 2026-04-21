@@ -58,7 +58,13 @@ function heatmapStyle(
   const hue = 20 + 100 * ratio;
   const saturation = isDarkMode ? 68 : 72;
   const lightness = isDarkMode ? 22 + ratio * 28 : 92 - ratio * 40;
-  const textColor = isDarkMode ? '#f7fafc' : '#111827';
+  const textColor = isDarkMode
+    ? lightness >= 38
+      ? '#0b1220'
+      : '#f8fafc'
+    : lightness >= 62
+      ? '#111827'
+      : '#f8fafc';
   return {
     backgroundColor: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
     color: textColor
