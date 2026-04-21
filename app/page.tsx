@@ -16,12 +16,6 @@ type DataRow = {
   revenueByCohort: Record<string, number>;
 };
 
-type AggregatedCell = {
-  period: string;
-  cohort: string;
-  roas: number | null;
-};
-
 const OS_MAP: Record<string, DataRow['os']> = {
   google_play: 'android',
   app_store: 'ios'
@@ -63,7 +57,7 @@ function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'networ
 }
 
 function formatCohort(cohortKey: string): string {
-  return cohortKey.replace('all_revenue_total_', '').toUpperCase();
+  return `ROAS ${cohortKey.replace('all_revenue_total_', '').toUpperCase()}`;
 }
 
 function matchesSelection(value: string, selectedValues: string[]): boolean {
@@ -228,7 +222,7 @@ export default function Page() {
     );
   }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
 
-  const { cells, periods, cohorts, maxRoas } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodRoas, maxRoas } = useMemo(() => {
     const periodAggregation = new Map<string, { cost: number; revenueByCohort: Record<string, number> }>();
 
     for (const row of scopedRows) {
@@ -244,37 +238,33 @@ export default function Page() {
       periodAggregation.set(period, current);
     }
 
-    const computed: AggregatedCell[] = [];
-    const periodSet = new Set<string>();
+    const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
+    const costMap = new Map<string, number>();
+    const roasMap = new Map<string, number | null>();
     let currentMax = 0;
 
-    periodAggregation.forEach((values, period) => {
-      periodSet.add(period);
-      for (const cohort of availableCohorts) {
+    periods.forEach((period) => {
+      const values = periodAggregation.get(period);
+      if (!values) return;
+      costMap.set(period, values.cost);
+
+      availableCohorts.forEach((cohort) => {
         const revenue = values.revenueByCohort[cohort] ?? 0;
         const roas = values.cost === 0 ? (revenue > 0 ? null : 0) : revenue / values.cost;
+        roasMap.set(`${period}|||${cohort}`, roas);
         if (roas !== null) {
           currentMax = Math.max(currentMax, roas);
         }
-        computed.push({ period, cohort, roas });
-      }
+      });
     });
 
     return {
-      cells: computed,
-      periods: Array.from(periodSet).sort((a, b) => a.localeCompare(b)),
-      cohorts: availableCohorts,
+      orderedPeriods: periods,
+      periodCost: costMap,
+      periodRoas: roasMap,
       maxRoas: currentMax
     };
   }, [scopedRows, granularity, availableCohorts]);
-
-  const cellMap = useMemo(() => {
-    const map = new Map<string, number | null>();
-    for (const cell of cells) {
-      map.set(`${cell.period}|||${cell.cohort}`, cell.roas);
-    }
-    return map;
-  }, [cells]);
 
   return (
     <main className="layout">
@@ -319,27 +309,29 @@ export default function Page() {
 
       <section className="heatmapWrap">
         <p className="legend">
-          ROAS por cohortes de revenue en porcentaje (D0, D3, D7, D14, D30, etc). Fórmula: (cohort_revenue / cost) ×
-          100.
+          Tabla por Cohort Date: primera columna Cohort date, segunda columna Ad spend y luego ROAS en porcentaje por
+          cohort (D0, D3, D7, etc).
         </p>
         <div className="heatmapScroll">
           <table className="heatmap">
             <thead>
               <tr>
-                <th>Cohort</th>
-                {periods.map((period) => (
-                  <th key={period}>{period}</th>
+                <th>Cohort date</th>
+                <th>Ad spend</th>
+                {availableCohorts.map((cohort) => (
+                  <th key={cohort}>{formatCohort(cohort)}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {cohorts.map((cohort) => (
-                <tr key={cohort}>
-                  <th>{formatCohort(cohort)}</th>
-                  {periods.map((period) => {
-                    const value = cellMap.get(`${period}|||${cohort}`) ?? null;
+              {orderedPeriods.map((period) => (
+                <tr key={period}>
+                  <th>{period}</th>
+                  <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                  {availableCohorts.map((cohort) => {
+                    const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
                     return (
-                      <td key={`${cohort}-${period}`} style={{ backgroundColor: heatmapColor(value, maxRoas) }}>
+                      <td key={`${period}-${cohort}`} style={{ backgroundColor: heatmapColor(value, maxRoas) }}>
                         {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
                       </td>
                     );
@@ -353,3 +345,4 @@ export default function Page() {
     </main>
   );
 }
+
