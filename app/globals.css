@@ -1,0 +1,102 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #fafafa;
+  color: #18181b;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 290px 1fr;
+  min-height: 100vh;
+}
+
+.filters {
+  border-right: 1px solid #e4e4e7;
+  padding: 24px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.filters h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+select,
+input {
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  min-height: 38px;
+  padding: 7px 10px;
+  font-size: 14px;
+}
+
+.heatmapWrap {
+  padding: 18px 20px;
+}
+
+.legend {
+  margin: 0 0 12px;
+  color: #3f3f46;
+}
+
+.heatmapScroll {
+  overflow: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.heatmap {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+
+.heatmap th,
+.heatmap td {
+  border: 1px solid #f4f4f5;
+  padding: 8px;
+  text-align: center;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.heatmap thead th {
+  background: #f4f4f5;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.heatmap tbody th {
+  position: sticky;
+  left: 0;
+  background: #fafafa;
+}
+
+@media (max-width: 950px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .filters {
+    border-right: 0;
+    border-bottom: 1px solid #e4e4e7;
+  }
+}
