@@ -66,15 +66,72 @@ function formatCohort(cohortKey: string): string {
   return cohortKey.replace('all_revenue_total_', '').toUpperCase();
 }
 
+function matchesSelection(value: string, selectedValues: string[]): boolean {
+  return selectedValues.length === 0 || selectedValues.includes(value);
+}
+
+function toggleValue(current: string[], value: string): string[] {
+  return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+}
+
+function selectionText(selected: string[]): string {
+  if (selected.length === 0) {
+    return 'Todos';
+  }
+  if (selected.length === 1) {
+    return selected[0];
+  }
+  return `${selected.length} seleccionados`;
+}
+
+function MultiSelect({
+  title,
+  options,
+  selected,
+  onChange
+}: {
+  title: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <details className="multiSelect" open>
+      <summary>
+        <span>{title}</span>
+        <span className="selectedValue">{selectionText(selected)}</span>
+      </summary>
+      <div className="multiSelectList">
+        <button type="button" className="clearBtn" onClick={() => onChange([])}>
+          Seleccionar todo
+        </button>
+        {options.map((option) => {
+          const checked = selected.includes(option);
+          return (
+            <label key={option} className="optionRow">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onChange(toggleValue(selected, option))}
+              />
+              <span>{option}</span>
+            </label>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 export default function Page() {
   const [rows, setRows] = useState<DataRow[]>([]);
   const [availableCohorts, setAvailableCohorts] = useState<string[]>([]);
   const [granularity, setGranularity] = useState<Granularity>('daily');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const [os, setOs] = useState('all');
-  const [network, setNetwork] = useState('all');
-  const [campaign, setCampaign] = useState('all');
+  const [selectedOs, setSelectedOs] = useState<string[]>([]);
+  const [selectedNetworks, setSelectedNetworks] = useState<string[]>([]);
+  const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
 
   useEffect(() => {
     Papa.parse<CsvRow>('/Campaign data.csv', {
@@ -139,43 +196,37 @@ export default function Page() {
   const osOptions = useMemo(() => optionValues(filteredByDate, 'os'), [filteredByDate]);
 
   const networkOptions = useMemo(() => {
-    const source = filteredByDate.filter((row) => os === 'all' || row.os === os);
+    const source = filteredByDate.filter((row) => matchesSelection(row.os, selectedOs));
     return optionValues(source, 'network');
-  }, [filteredByDate, os]);
+  }, [filteredByDate, selectedOs]);
 
   const campaignOptions = useMemo(() => {
     const source = filteredByDate.filter(
-      (row) => (os === 'all' || row.os === os) && (network === 'all' || row.network === network)
+      (row) => matchesSelection(row.os, selectedOs) && matchesSelection(row.network, selectedNetworks)
     );
     return optionValues(source, 'campaign');
-  }, [filteredByDate, os, network]);
+  }, [filteredByDate, selectedOs, selectedNetworks]);
 
   useEffect(() => {
-    if (os !== 'all' && !osOptions.includes(os)) {
-      setOs('all');
-    }
-  }, [os, osOptions]);
+    setSelectedOs((current) => current.filter((value) => osOptions.includes(value)));
+  }, [osOptions]);
 
   useEffect(() => {
-    if (network !== 'all' && !networkOptions.includes(network)) {
-      setNetwork('all');
-    }
-  }, [network, networkOptions]);
+    setSelectedNetworks((current) => current.filter((value) => networkOptions.includes(value)));
+  }, [networkOptions]);
 
   useEffect(() => {
-    if (campaign !== 'all' && !campaignOptions.includes(campaign)) {
-      setCampaign('all');
-    }
-  }, [campaign, campaignOptions]);
+    setSelectedCampaigns((current) => current.filter((value) => campaignOptions.includes(value)));
+  }, [campaignOptions]);
 
   const scopedRows = useMemo(() => {
     return filteredByDate.filter(
       (row) =>
-        (os === 'all' || row.os === os) &&
-        (network === 'all' || row.network === network) &&
-        (campaign === 'all' || row.campaign === campaign)
+        matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.network, selectedNetworks) &&
+        matchesSelection(row.campaign, selectedCampaigns)
     );
-  }, [filteredByDate, os, network, campaign]);
+  }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
 
   const { cells, periods, cohorts, maxRoas } = useMemo(() => {
     const periodAggregation = new Map<string, { cost: number; revenueByCohort: Record<string, number> }>();
@@ -249,45 +300,28 @@ export default function Page() {
           <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
         </label>
 
-        <label>
-          Sistema operativo
-          <select value={os} onChange={(event) => setOs(event.target.value)}>
-            <option value="all">Todos</option>
-            {osOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSelect title="Sistema operativo" options={osOptions} selected={selectedOs} onChange={setSelectedOs} />
 
-        <label>
-          Network
-          <select value={network} onChange={(event) => setNetwork(event.target.value)}>
-            <option value="all">Todas</option>
-            {networkOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSelect
+          title="Network"
+          options={networkOptions}
+          selected={selectedNetworks}
+          onChange={setSelectedNetworks}
+        />
 
-        <label>
-          Campaña
-          <select value={campaign} onChange={(event) => setCampaign(event.target.value)}>
-            <option value="all">Todas</option>
-            {campaignOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSelect
+          title="Campaña"
+          options={campaignOptions}
+          selected={selectedCampaigns}
+          onChange={setSelectedCampaigns}
+        />
       </aside>
 
       <section className="heatmapWrap">
-        <p className="legend">ROAS por cohortes de revenue (D0, D3, D7, D14, D30, etc). Fórmula: cohort_revenue / cost.</p>
+        <p className="legend">
+          ROAS por cohortes de revenue en porcentaje (D0, D3, D7, D14, D30, etc). Fórmula: (cohort_revenue / cost) ×
+          100.
+        </p>
         <div className="heatmapScroll">
           <table className="heatmap">
             <thead>
@@ -306,7 +340,7 @@ export default function Page() {
                     const value = cellMap.get(`${period}|||${cohort}`) ?? null;
                     return (
                       <td key={`${cohort}-${period}`} style={{ backgroundColor: heatmapColor(value, maxRoas) }}>
-                        {value === null ? '∞ / N/A' : value.toFixed(2)}
+                        {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
                       </td>
                     );
                   })}
