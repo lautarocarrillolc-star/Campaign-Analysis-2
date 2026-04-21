@@ -2,31 +2,75 @@
   box-sizing: border-box;
 }
 
+:root {
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --text: #18181b;
+  --muted: #3f3f46;
+  --border: #e4e4e7;
+  --border-soft: #d4d4d8;
+  --thead: #f4f4f5;
+}
+
+body[data-theme='dark'] {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --text: #f4f4f5;
+  --muted: #a1a1aa;
+  --border: #2b3340;
+  --border-soft: #3b4250;
+  --thead: #202634;
+}
+
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: #fafafa;
-  color: #18181b;
+  background: var(--bg);
+  color: var(--text);
+  transition: background 260ms ease, color 260ms ease;
 }
 
 .layout {
   display: grid;
-  grid-template-columns: 290px 1fr;
+  grid-template-columns: 310px 1fr;
   min-height: 100vh;
 }
 
 .filters {
-  border-right: 1px solid #e4e4e7;
+  border-right: 1px solid var(--border);
   padding: 24px;
-  background: #fff;
+  background: var(--panel);
   display: flex;
   flex-direction: column;
   gap: 14px;
+  transition: background 260ms ease, border-color 260ms ease;
+}
+
+.titleRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
 }
 
 .filters h1 {
   margin: 0 0 6px;
   font-size: 24px;
+}
+
+.modeBtn {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 220ms ease;
+}
+
+.modeBtn:hover {
+  transform: translateY(-1px);
 }
 
 label {
@@ -39,11 +83,84 @@ label {
 
 select,
 input {
-  border: 1px solid #d4d4d8;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
   min-height: 38px;
   padding: 7px 10px;
   font-size: 14px;
+  background: var(--panel);
+  color: var(--text);
+  transition: all 220ms ease;
+}
+
+.multiSelect {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.multiSelect summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.multiSelect summary::-webkit-details-marker {
+  display: none;
+}
+
+.selectedValue {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.multiSelectList {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.searchInput {
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.optionRow {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.clearBtn {
+  background: var(--thead);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.toggleRow {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .heatmapWrap {
@@ -52,14 +169,15 @@ input {
 
 .legend {
   margin: 0 0 12px;
-  color: #3f3f46;
+  color: var(--muted);
 }
 
 .heatmapScroll {
   overflow: auto;
-  border: 1px solid #e4e4e7;
+  border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--panel);
+  transition: all 260ms ease;
 }
 
 .heatmap {
@@ -70,7 +188,7 @@ input {
 
 .heatmap th,
 .heatmap td {
-  border: 1px solid #f4f4f5;
+  border: 1px solid var(--border);
   padding: 8px;
   text-align: center;
   white-space: nowrap;
@@ -78,7 +196,7 @@ input {
 }
 
 .heatmap thead th {
-  background: #f4f4f5;
+  background: var(--thead);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -87,7 +205,7 @@ input {
 .heatmap tbody th {
   position: sticky;
   left: 0;
-  background: #fafafa;
+  background: var(--bg);
 }
 
 @media (max-width: 950px) {
@@ -97,7 +215,7 @@ input {
 
   .filters {
     border-right: 0;
-    border-bottom: 1px solid #e4e4e7;
+    border-bottom: 1px solid var(--border);
   }
 }
 
