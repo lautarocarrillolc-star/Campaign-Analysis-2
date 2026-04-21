@@ -60,6 +60,19 @@ function formatCohort(cohortKey: string): string {
   return `ROAS ${cohortKey.replace('all_revenue_total_', '').toUpperCase()}`;
 }
 
+function cohortSortValue(cohortKey: string): number {
+  const raw = cohortKey.replace('all_revenue_total_', '').toLowerCase();
+  if (raw.startsWith('d')) {
+    const day = Number(raw.slice(1));
+    return Number.isFinite(day) ? day : Number.MAX_SAFE_INTEGER - 1;
+  }
+  if (raw.startsWith('m')) {
+    const month = Number(raw.slice(1));
+    return Number.isFinite(month) ? month * 30 : Number.MAX_SAFE_INTEGER;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
 function matchesSelection(value: string, selectedValues: string[]): boolean {
   return selectedValues.length === 0 || selectedValues.includes(value);
 }
@@ -146,6 +159,12 @@ export default function Page() {
   const [selectedOs, setSelectedOs] = useState<string[]>([]);
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>([]);
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [maturedOnly, setMaturedOnly] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  useEffect(() => {
+    document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
+  }, [isDarkMode]);
 
   useEffect(() => {
     Papa.parse<CsvRow>('/Campaign data.csv', {
@@ -156,7 +175,7 @@ export default function Page() {
         const fields = result.meta.fields ?? [];
         const cohorts = fields
           .filter((field) => field.startsWith('all_revenue_total_'))
-          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+          .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
 
         const parsed = result.data
           .map((row) => {
@@ -276,6 +295,18 @@ export default function Page() {
           currentMax = Math.max(currentMax, roas);
         }
       });
+
+      if (maturedOnly) {
+        let previousRevenue: number | null = null;
+        availableCohorts.forEach((cohort) => {
+          const revenue = values.revenueByCohort[cohort] ?? 0;
+          if (previousRevenue !== null && revenue < previousRevenue) {
+            roasMap.set(`${period}|||${cohort}`, null);
+          } else {
+            previousRevenue = revenue;
+          }
+        });
+      }
     });
 
     return {
@@ -284,12 +315,17 @@ export default function Page() {
       periodRoas: roasMap,
       maxRoas: currentMax
     };
-  }, [scopedRows, granularity, availableCohorts]);
+  }, [scopedRows, granularity, availableCohorts, maturedOnly]);
 
   return (
     <main className="layout">
       <aside className="filters">
-        <h1>ROAS Heatmap</h1>
+        <div className="titleRow">
+          <h1>ROAS Heatmap</h1>
+          <button className="modeBtn" type="button" onClick={() => setIsDarkMode((current) => !current)}>
+            {isDarkMode ? 'Light mode' : 'Dark mode'}
+          </button>
+        </div>
 
         <label>
           Tipo de fecha
@@ -327,6 +363,11 @@ export default function Page() {
           onChange={setSelectedCampaigns}
           searchable
         />
+
+        <label className="toggleRow">
+          <input type="checkbox" checked={maturedOnly} onChange={(event) => setMaturedOnly(event.target.checked)} />
+          <span>Maturated cohorts only?</span>
+        </label>
       </aside>
 
       <section className="heatmapWrap">
@@ -367,4 +408,3 @@ export default function Page() {
     </main>
   );
 }
-
