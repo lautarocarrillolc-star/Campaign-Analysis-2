@@ -43,13 +43,26 @@ function periodKey(day: Date, granularity: Granularity): string {
   return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 }
 
-function heatmapColor(value: number | null, maxRoas: number): string {
+function heatmapStyle(
+  value: number | null,
+  maxRoas: number,
+  isDarkMode: boolean
+): { backgroundColor: string; color: string } {
   if (value === null) {
-    return '#f4f4f5';
+    return {
+      backgroundColor: isDarkMode ? '#2a2f3a' : '#f4f4f5',
+      color: isDarkMode ? '#cfd5e1' : '#3f3f46'
+    };
   }
   const ratio = maxRoas > 0 ? Math.min(value / maxRoas, 1) : 0;
-  const hue = 120 * ratio;
-  return `hsl(${hue}, 72%, ${95 - ratio * 45}%)`;
+  const hue = 20 + 100 * ratio;
+  const saturation = isDarkMode ? 68 : 72;
+  const lightness = isDarkMode ? 22 + ratio * 28 : 92 - ratio * 40;
+  const textColor = isDarkMode ? '#f7fafc' : '#111827';
+  return {
+    backgroundColor: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
+    color: textColor
+  };
 }
 
 function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'network' | 'campaign'>): string[] {
@@ -394,7 +407,7 @@ export default function Page() {
                   {availableCohorts.map((cohort) => {
                     const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
                     return (
-                      <td key={`${period}-${cohort}`} style={{ backgroundColor: heatmapColor(value, maxRoas) }}>
+                      <td key={`${period}-${cohort}`} style={heatmapStyle(value, maxRoas, isDarkMode)}>
                         {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
                       </td>
                     );
