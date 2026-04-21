@@ -83,6 +83,14 @@ input {
   overflow: auto;
 }
 
+.searchInput {
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .optionRow {
   display: flex;
   flex-direction: row;
