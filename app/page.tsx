@@ -82,13 +82,24 @@ function MultiSelect({
   title,
   options,
   selected,
-  onChange
+  onChange,
+  searchable = false
 }: {
   title: string;
   options: string[];
   selected: string[];
   onChange: (next: string[]) => void;
+  searchable?: boolean;
 }) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const visibleOptions = useMemo(() => {
+    const normalized = searchTerm.trim().toLowerCase();
+    if (!normalized) {
+      return options;
+    }
+    return options.filter((option) => option.toLowerCase().includes(normalized));
+  }, [options, searchTerm]);
+
   return (
     <details className="multiSelect" open>
       <summary>
@@ -96,10 +107,19 @@ function MultiSelect({
         <span className="selectedValue">{selectionText(selected)}</span>
       </summary>
       <div className="multiSelectList">
+        {searchable && (
+          <input
+            className="searchInput"
+            type="text"
+            placeholder={`Buscar ${title.toLowerCase()}...`}
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        )}
         <button type="button" className="clearBtn" onClick={() => onChange([])}>
           Seleccionar todo
         </button>
-        {options.map((option) => {
+        {visibleOptions.map((option) => {
           const checked = selected.includes(option);
           return (
             <label key={option} className="optionRow">
@@ -297,6 +317,7 @@ export default function Page() {
           options={networkOptions}
           selected={selectedNetworks}
           onChange={setSelectedNetworks}
+          searchable
         />
 
         <MultiSelect
@@ -304,6 +325,7 @@ export default function Page() {
           options={campaignOptions}
           selected={selectedCampaigns}
           onChange={setSelectedCampaigns}
+          searchable
         />
       </aside>
 
