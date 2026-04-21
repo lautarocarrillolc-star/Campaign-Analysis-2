@@ -92,6 +92,19 @@ function cohortSortValue(cohortKey: string): number {
   return Number.MAX_SAFE_INTEGER;
 }
 
+function cohortWindowDays(cohortKey: string): number {
+  const raw = cohortKey.replace('all_revenue_total_', '').toLowerCase();
+  if (raw.startsWith('d')) {
+    const day = Number(raw.slice(1));
+    return Number.isFinite(day) ? day : 0;
+  }
+  if (raw.startsWith('m')) {
+    const month = Number(raw.slice(1));
+    return Number.isFinite(month) ? month * 30 : 0;
+  }
+  return 0;
+}
+
 function matchesSelection(value: string, selectedValues: string[]): boolean {
   return selectedValues.length === 0 || selectedValues.includes(value);
 }
@@ -281,16 +294,30 @@ export default function Page() {
   }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
 
   const { orderedPeriods, periodCost, periodRoas, maxRoas } = useMemo(() => {
-    const periodAggregation = new Map<string, { cost: number; revenueByCohort: Record<string, number> }>();
+    const periodAggregation = new Map<
+      string,
+      {
+        totalCost: number;
+        revenueByCohort: Record<string, number>;
+        cohortCost: Record<string, number>;
+      }
+    >();
+    const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
 
     for (const row of scopedRows) {
       const period = periodKey(row.day, granularity);
-      const current = periodAggregation.get(period) ?? { cost: 0, revenueByCohort: {} };
-      current.cost += row.cost;
+      const current = periodAggregation.get(period) ?? { totalCost: 0, revenueByCohort: {}, cohortCost: {} };
+      current.totalCost += row.cost;
 
       for (const cohort of availableCohorts) {
-        current.revenueByCohort[cohort] =
-          (current.revenueByCohort[cohort] ?? 0) + (row.revenueByCohort[cohort] ?? 0);
+        const daysNeeded = cohortWindowDays(cohort);
+        const msNeeded = daysNeeded * 86400000;
+        const isMatured = row.day.getTime() + msNeeded <= maxAvailableDay.getTime();
+        if (!maturedOnly || isMatured) {
+          current.revenueByCohort[cohort] =
+            (current.revenueByCohort[cohort] ?? 0) + (row.revenueByCohort[cohort] ?? 0);
+          current.cohortCost[cohort] = (current.cohortCost[cohort] ?? 0) + row.cost;
+        }
       }
 
       periodAggregation.set(period, current);
@@ -304,28 +331,17 @@ export default function Page() {
     periods.forEach((period) => {
       const values = periodAggregation.get(period);
       if (!values) return;
-      costMap.set(period, values.cost);
+      costMap.set(period, values.totalCost);
 
       availableCohorts.forEach((cohort) => {
         const revenue = values.revenueByCohort[cohort] ?? 0;
-        const roas = values.cost === 0 ? (revenue > 0 ? null : 0) : revenue / values.cost;
+        const eligibleCost = values.cohortCost[cohort] ?? 0;
+        const roas = eligibleCost === 0 ? null : revenue / eligibleCost;
         roasMap.set(`${period}|||${cohort}`, roas);
         if (roas !== null) {
           currentMax = Math.max(currentMax, roas);
         }
       });
-
-      if (maturedOnly) {
-        let previousRevenue: number | null = null;
-        availableCohorts.forEach((cohort) => {
-          const revenue = values.revenueByCohort[cohort] ?? 0;
-          if (previousRevenue !== null && revenue < previousRevenue) {
-            roasMap.set(`${period}|||${cohort}`, null);
-          } else {
-            previousRevenue = revenue;
-          }
-        });
-      }
     });
 
     return {
@@ -385,14 +401,14 @@ export default function Page() {
 
         <label className="toggleRow">
           <input type="checkbox" checked={maturedOnly} onChange={(event) => setMaturedOnly(event.target.checked)} />
-          <span>Maturated cohorts only?</span>
+          <span>Maturated cohorts only? (full windows)</span>
         </label>
       </aside>
 
       <section className="heatmapWrap">
         <p className="legend">
           Tabla por Cohort Date: primera columna Cohort date, segunda columna Ad spend y luego ROAS en porcentaje por
-          cohort (D0, D3, D7, etc).
+          cohort (D0, D3, D7, etc). Con "Maturated cohorts only?" activo, solo se muestran ventanas completas.
         </p>
         <div className="heatmapScroll">
           <table className="heatmap">
@@ -427,3 +443,4 @@ export default function Page() {
     </main>
   );
 }
+
