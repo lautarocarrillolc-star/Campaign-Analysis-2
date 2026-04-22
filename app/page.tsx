@@ -529,7 +529,8 @@ export default function Page() {
       <section className="heatmapWrap">
         <p className="legend">
           Tabla por Cohort Date: primera columna Cohort date, segunda columna Ad spend y luego ROAS en porcentaje por
-          cohort (D0, D3, D7, etc). Con "Maturated cohorts only?" activo, solo se muestran ventanas completas.
+          cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
+          completas.
         </p>
         <div className="heatmapScroll">
           <table className="heatmap">
@@ -609,4 +610,3 @@ export default function Page() {
     </main>
   );
 }
-
