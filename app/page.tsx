@@ -62,9 +62,7 @@ function heatmapStyle(
     ? lightness >= 38
       ? '#0b1220'
       : '#f8fafc'
-    : lightness >= 62
-      ? '#111827'
-      : '#f8fafc';
+    : '#111827';
   return {
     backgroundColor: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
     color: textColor
@@ -341,7 +339,13 @@ export default function Page() {
       }
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
-    const osRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
+    const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const scopedRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+    const globalRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
       android: {},
       ios: {},
       other: {}
@@ -350,6 +354,28 @@ export default function Page() {
     const cohortPairs = availableCohorts
       .slice(0, -1)
       .map((cohort, index) => [cohort, availableCohorts[index + 1]] as const);
+
+    const accumulateRatios = (
+      sourceRows: DataRow[],
+      accumulator: Record<string, Record<string, { total: number; count: number }>>,
+      maxDay: Date
+    ) => {
+      for (const row of sourceRows) {
+        cohortPairs.forEach(([fromCohort, toCohort]) => {
+          const toDays = cohortWindowDays(toCohort);
+          const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxDay.getTime();
+          const fromValue = row.revenueByCohort[fromCohort] ?? 0;
+          const toValue = row.revenueByCohort[toCohort] ?? 0;
+          if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
+            const key = ratioKey(fromCohort, toCohort);
+            const entry = accumulator[row.os][key] ?? { total: 0, count: 0 };
+            entry.total += toValue / fromValue;
+            entry.count += 1;
+            accumulator[row.os][key] = entry;
+          }
+        });
+      }
+    };
 
     for (const row of scopedRows) {
       const period = periodKey(row.day, granularity);
@@ -373,22 +399,10 @@ export default function Page() {
         }
       }
 
-      cohortPairs.forEach(([fromCohort, toCohort]) => {
-        const toDays = cohortWindowDays(toCohort);
-        const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDay.getTime();
-        const fromValue = row.revenueByCohort[fromCohort] ?? 0;
-        const toValue = row.revenueByCohort[toCohort] ?? 0;
-        if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
-          const key = ratioKey(fromCohort, toCohort);
-          const entry = osRatioAccumulator[row.os][key] ?? { total: 0, count: 0 };
-          entry.total += toValue / fromValue;
-          entry.count += 1;
-          osRatioAccumulator[row.os][key] = entry;
-        }
-      });
-
       periodAggregation.set(period, current);
     }
+    accumulateRatios(scopedRows, scopedRatioAccumulator, maxAvailableDay);
+    accumulateRatios(filteredByDate, globalRatioAccumulator, maxAvailableDayGlobal);
 
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
@@ -397,15 +411,25 @@ export default function Page() {
     const predictedMaskMap = new Map<string, boolean>();
     let currentMax = 0;
 
-    const osRatioAverages: Record<string, Record<string, number>> = {
+    const osRatioAveragesScoped: Record<string, Record<string, number>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+    const osRatioAveragesGlobal: Record<string, Record<string, number>> = {
       android: {},
       ios: {},
       other: {}
     };
     (['android', 'ios', 'other'] as const).forEach((osKey) => {
-      Object.entries(osRatioAccumulator[osKey]).forEach(([key, value]) => {
+      Object.entries(scopedRatioAccumulator[osKey]).forEach(([key, value]) => {
         if (value.count > 0) {
-          osRatioAverages[osKey][key] = value.total / value.count;
+          osRatioAveragesScoped[osKey][key] = value.total / value.count;
+        }
+      });
+      Object.entries(globalRatioAccumulator[osKey]).forEach(([key, value]) => {
+        if (value.count > 0) {
+          osRatioAveragesGlobal[osKey][key] = value.total / value.count;
         }
       });
     });
@@ -433,7 +457,7 @@ export default function Page() {
         let usedWeight = 0;
         (['android', 'ios', 'other'] as const).forEach((osKey) => {
           const weight = (values.osCost[osKey] ?? 0) / osTotal;
-          const ratio = osRatioAverages[osKey][key];
+          const ratio = osRatioAveragesScoped[osKey][key] ?? osRatioAveragesGlobal[osKey][key];
           if (ratio) {
             blended += ratio * weight;
             usedWeight += weight;
@@ -492,10 +516,10 @@ export default function Page() {
       periodRoas: roasMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
-      ratioSummary: osRatioAverages,
+      ratioSummary: osRatioAveragesScoped,
       maxRoas: currentMax
     };
-  }, [scopedRows, granularity, availableCohorts, maturedOnly]);
+  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly]);
 
   return (
     <main className="layout">
@@ -673,7 +697,8 @@ export default function Page() {
                 </li>
                 <li>
                   El ratio se calcula por <b>OS</b> (Android/iOS). Si el filtro es Unity + Android, usamos solo ratios
-                  Android de Unity; si es Unity + iOS, usamos solo iOS.
+                  Android de Unity; si es Unity + iOS, usamos solo iOS. Si falta ratio en ese scope, usamos fallback
+                  del mismo OS en la data global filtrada por fecha.
                 </li>
                 <li>
                   Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
