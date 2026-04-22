@@ -340,7 +340,7 @@ export default function Page() {
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
-    const globalRatioAccumulator: Record<string, Record<string, number[]>> = {
+    const globalRatioAccumulator: Record<string, Record<string, Array<{ ratio: number; weight: number }>>> = {
       android: {},
       ios: {},
       other: {}
@@ -352,7 +352,7 @@ export default function Page() {
 
     const accumulateRatios = (
       sourceRows: DataRow[],
-      accumulator: Record<string, Record<string, number[]>>,
+      accumulator: Record<string, Record<string, Array<{ ratio: number; weight: number }>>>,
       maxDay: Date
     ) => {
       for (const row of sourceRows) {
@@ -364,7 +364,7 @@ export default function Page() {
           if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
             const key = ratioKey(fromCohort, toCohort);
             const entry = accumulator[row.os][key] ?? [];
-            entry.push(toValue / fromValue);
+            entry.push({ ratio: toValue / fromValue, weight: Math.max(row.cost, 1) });
             accumulator[row.os][key] = entry;
           }
         });
@@ -410,13 +410,21 @@ export default function Page() {
       other: {}
     };
     (['android', 'ios', 'other'] as const).forEach((osKey) => {
-      Object.entries(globalRatioAccumulator[osKey]).forEach(([key, values]) => {
-        if (values.length > 0) {
-          const sorted = [...values].sort((a, b) => a - b);
-          const mid = Math.floor(sorted.length / 2);
-          const median =
-            sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-          osRatioAveragesGlobal[osKey][key] = median;
+      Object.entries(globalRatioAccumulator[osKey]).forEach(([key, samples]) => {
+        if (samples.length >= 6) {
+          const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
+          const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
+          const halfWeight = totalWeight / 2;
+          let running = 0;
+          let weightedMedian = sorted[sorted.length - 1].ratio;
+          for (const sample of sorted) {
+            running += sample.weight;
+            if (running >= halfWeight) {
+              weightedMedian = sample.ratio;
+              break;
+            }
+          }
+          osRatioAveragesGlobal[osKey][key] = weightedMedian;
         }
       });
     });
@@ -677,7 +685,7 @@ export default function Page() {
               <ol>
                 <li>
                   Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>
-                  y usamos la <b>mediana</b> para evitar outliers.
+                  y usamos la <b>mediana ponderada por spend</b> para evitar outliers.
                 </li>
                 <li>
                   Excluimos casos donde el revenue del cohort siguiente es menor al anterior para evitar ratios
@@ -687,6 +695,7 @@ export default function Page() {
                   El ratio se calcula por <b>OS</b> (Android/iOS) usando <b>toda la data del OS</b> dentro del rango de
                   fechas (no solo la data de la network/campaña filtrada).
                 </li>
+                <li>Solo usamos saltos con muestra mínima (>=6 puntos) para evitar ratios inestables.</li>
                 <li>
                   Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
                   <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.
