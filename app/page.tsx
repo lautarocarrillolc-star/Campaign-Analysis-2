@@ -340,7 +340,7 @@ export default function Page() {
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
-    const globalRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
+    const globalRatioAccumulator: Record<string, Record<string, number[]>> = {
       android: {},
       ios: {},
       other: {}
@@ -352,7 +352,7 @@ export default function Page() {
 
     const accumulateRatios = (
       sourceRows: DataRow[],
-      accumulator: Record<string, Record<string, { total: number; count: number }>>,
+      accumulator: Record<string, Record<string, number[]>>,
       maxDay: Date
     ) => {
       for (const row of sourceRows) {
@@ -363,9 +363,8 @@ export default function Page() {
           const toValue = row.revenueByCohort[toCohort] ?? 0;
           if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
             const key = ratioKey(fromCohort, toCohort);
-            const entry = accumulator[row.os][key] ?? { total: 0, count: 0 };
-            entry.total += toValue / fromValue;
-            entry.count += 1;
+            const entry = accumulator[row.os][key] ?? [];
+            entry.push(toValue / fromValue);
             accumulator[row.os][key] = entry;
           }
         });
@@ -411,9 +410,13 @@ export default function Page() {
       other: {}
     };
     (['android', 'ios', 'other'] as const).forEach((osKey) => {
-      Object.entries(globalRatioAccumulator[osKey]).forEach(([key, value]) => {
-        if (value.count > 0) {
-          osRatioAveragesGlobal[osKey][key] = value.total / value.count;
+      Object.entries(globalRatioAccumulator[osKey]).forEach(([key, values]) => {
+        if (values.length > 0) {
+          const sorted = [...values].sort((a, b) => a - b);
+          const mid = Math.floor(sorted.length / 2);
+          const median =
+            sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+          osRatioAveragesGlobal[osKey][key] = median;
         }
       });
     });
@@ -673,7 +676,8 @@ export default function Page() {
               <h3>¿Cómo se calcula la predicción?</h3>
               <ol>
                 <li>
-                  Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>.
+                  Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>
+                  y usamos la <b>mediana</b> para evitar outliers.
                 </li>
                 <li>
                   Excluimos casos donde el revenue del cohort siguiente es menor al anterior para evitar ratios
