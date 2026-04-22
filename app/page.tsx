@@ -206,6 +206,7 @@ export default function Page() {
   const [maturedOnly, setMaturedOnly] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [enablePrediction, setEnablePrediction] = useState(false);
+  const [enableCountryFallback, setEnableCountryFallback] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
 
@@ -556,7 +557,7 @@ export default function Page() {
           const ratio =
             campaignRatioAverages[osKey][key] ??
             networkRatioAverages[osKey][key] ??
-            countryRatioAverages[osKey][topCountry]?.[key] ??
+            (enableCountryFallback ? countryRatioAverages[osKey][topCountry]?.[key] : undefined) ??
             osRatioAveragesGlobal[osKey][key];
           if (ratio) {
             blended += ratio * weight;
@@ -620,7 +621,7 @@ export default function Page() {
       ratioSummary: activeRatioSummary,
       maxRoas: currentMax
     };
-  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks]);
+  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, enableCountryFallback]);
 
   return (
     <main className="layout">
@@ -698,6 +699,15 @@ export default function Page() {
             onChange={(event) => setEnablePrediction(event.target.checked)}
           />
           <span>Enable prediction</span>
+        </label>
+
+        <label className="toggleRow">
+          <input
+            type="checkbox"
+            checked={enableCountryFallback}
+            onChange={(event) => setEnableCountryFallback(event.target.checked)}
+          />
+          <span>Predicción por país?</span>
         </label>
       </aside>
 
@@ -798,8 +808,9 @@ export default function Page() {
                   contaminados por ventanas incompletas.
                 </li>
                 <li>
-                  Fallback jerárquico de ratios por OS: <b>campaña → network → país → OS global</b>. Si hay ratio
-                  suficiente a nivel campaña usamos ese; si no, subimos a network; luego país; y por último OS global.
+                  Fallback jerárquico de ratios por OS: <b>campaña → network → (país si está activado) → OS global</b>.
+                  Si hay ratio suficiente a nivel campaña usamos ese; si no, subimos a network; luego país (si el
+                  toggle “Predicción por país?” está ON); y por último OS global.
                 </li>
                 <li>Solo usamos saltos con muestra mínima (&gt;=6 puntos) para evitar ratios inestables.</li>
                 <li>
