@@ -340,11 +340,6 @@ export default function Page() {
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
-    const scopedRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
-      android: {},
-      ios: {},
-      other: {}
-    };
     const globalRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
       android: {},
       ios: {},
@@ -401,7 +396,6 @@ export default function Page() {
 
       periodAggregation.set(period, current);
     }
-    accumulateRatios(scopedRows, scopedRatioAccumulator, maxAvailableDay);
     accumulateRatios(filteredByDate, globalRatioAccumulator, maxAvailableDayGlobal);
 
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
@@ -411,22 +405,12 @@ export default function Page() {
     const predictedMaskMap = new Map<string, boolean>();
     let currentMax = 0;
 
-    const osRatioAveragesScoped: Record<string, Record<string, number>> = {
-      android: {},
-      ios: {},
-      other: {}
-    };
     const osRatioAveragesGlobal: Record<string, Record<string, number>> = {
       android: {},
       ios: {},
       other: {}
     };
     (['android', 'ios', 'other'] as const).forEach((osKey) => {
-      Object.entries(scopedRatioAccumulator[osKey]).forEach(([key, value]) => {
-        if (value.count > 0) {
-          osRatioAveragesScoped[osKey][key] = value.total / value.count;
-        }
-      });
       Object.entries(globalRatioAccumulator[osKey]).forEach(([key, value]) => {
         if (value.count > 0) {
           osRatioAveragesGlobal[osKey][key] = value.total / value.count;
@@ -457,7 +441,7 @@ export default function Page() {
         let usedWeight = 0;
         (['android', 'ios', 'other'] as const).forEach((osKey) => {
           const weight = (values.osCost[osKey] ?? 0) / osTotal;
-          const ratio = osRatioAveragesScoped[osKey][key] ?? osRatioAveragesGlobal[osKey][key];
+          const ratio = osRatioAveragesGlobal[osKey][key];
           if (ratio) {
             blended += ratio * weight;
             usedWeight += weight;
@@ -516,7 +500,7 @@ export default function Page() {
       periodRoas: roasMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
-      ratioSummary: osRatioAveragesScoped,
+      ratioSummary: osRatioAveragesGlobal,
       maxRoas: currentMax
     };
   }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly]);
@@ -696,9 +680,8 @@ export default function Page() {
                   contaminados por ventanas incompletas.
                 </li>
                 <li>
-                  El ratio se calcula por <b>OS</b> (Android/iOS). Si el filtro es Unity + Android, usamos solo ratios
-                  Android de Unity; si es Unity + iOS, usamos solo iOS. Si falta ratio en ese scope, usamos fallback
-                  del mismo OS en la data global filtrada por fecha.
+                  El ratio se calcula por <b>OS</b> (Android/iOS) usando <b>toda la data del OS</b> dentro del rango de
+                  fechas (no solo la data de la network/campaña filtrada).
                 </li>
                 <li>
                   Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
@@ -733,5 +716,4 @@ export default function Page() {
     </main>
   );
 }
-
 
