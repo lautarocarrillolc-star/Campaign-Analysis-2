@@ -340,11 +340,14 @@ export default function Page() {
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
-    const globalRatioAccumulator: Record<string, Record<string, Array<{ ratio: number; weight: number }>>> = {
+    const createAccumulator = (): Record<string, Record<string, Array<{ ratio: number; weight: number }>>> => ({
       android: {},
       ios: {},
       other: {}
-    };
+    });
+    const campaignRatioAccumulator = createAccumulator();
+    const networkRatioAccumulator = createAccumulator();
+    const osRatioAccumulator = createAccumulator();
 
     const cohortPairs = availableCohorts
       .slice(0, -1)
@@ -395,7 +398,18 @@ export default function Page() {
 
       periodAggregation.set(period, current);
     }
-    accumulateRatios(filteredByDate, globalRatioAccumulator, maxAvailableDayGlobal);
+    const campaignRows =
+      selectedCampaigns.length > 0
+        ? filteredByDate.filter((row) => selectedCampaigns.includes(row.campaign))
+        : [];
+    const networkRows =
+      selectedNetworks.length > 0
+        ? filteredByDate.filter((row) => selectedNetworks.includes(row.network))
+        : [];
+
+    accumulateRatios(campaignRows, campaignRatioAccumulator, maxAvailableDayGlobal);
+    accumulateRatios(networkRows, networkRatioAccumulator, maxAvailableDayGlobal);
+    accumulateRatios(filteredByDate, osRatioAccumulator, maxAvailableDayGlobal);
 
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
@@ -404,30 +418,45 @@ export default function Page() {
     const predictedMaskMap = new Map<string, boolean>();
     let currentMax = 0;
 
-    const osRatioAveragesGlobal: Record<string, Record<string, number>> = {
+    const buildWeightedMedianAverages = (
+      accumulator: Record<string, Record<string, Array<{ ratio: number; weight: number }>>>
+    ): Record<string, Record<string, number>> => {
+      const output: Record<string, Record<string, number>> = {
+        android: {},
+        ios: {},
+        other: {}
+      };
+      (['android', 'ios', 'other'] as const).forEach((osKey) => {
+        Object.entries(accumulator[osKey]).forEach(([key, samples]) => {
+          if (samples.length >= 6) {
+            const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
+            const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
+            const halfWeight = totalWeight / 2;
+            let running = 0;
+            let weightedMedian = sorted[sorted.length - 1].ratio;
+            for (const sample of sorted) {
+              running += sample.weight;
+              if (running >= halfWeight) {
+                weightedMedian = sample.ratio;
+                break;
+              }
+            }
+            output[osKey][key] = weightedMedian;
+          }
+        });
+      });
+      return output;
+    };
+
+    const campaignRatioAverages = buildWeightedMedianAverages(campaignRatioAccumulator);
+    const networkRatioAverages = buildWeightedMedianAverages(networkRatioAccumulator);
+    const osRatioAveragesGlobal = buildWeightedMedianAverages(osRatioAccumulator);
+
+    const activeRatioSummary: Record<string, Record<string, number>> = {
       android: {},
       ios: {},
       other: {}
     };
-    (['android', 'ios', 'other'] as const).forEach((osKey) => {
-      Object.entries(globalRatioAccumulator[osKey]).forEach(([key, samples]) => {
-        if (samples.length >= 6) {
-          const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
-          const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
-          const halfWeight = totalWeight / 2;
-          let running = 0;
-          let weightedMedian = sorted[sorted.length - 1].ratio;
-          for (const sample of sorted) {
-            running += sample.weight;
-            if (running >= halfWeight) {
-              weightedMedian = sample.ratio;
-              break;
-            }
-          }
-          osRatioAveragesGlobal[osKey][key] = weightedMedian;
-        }
-      });
-    });
 
     periods.forEach((period) => {
       const values = periodAggregation.get(period);
@@ -452,10 +481,14 @@ export default function Page() {
         let usedWeight = 0;
         (['android', 'ios', 'other'] as const).forEach((osKey) => {
           const weight = (values.osCost[osKey] ?? 0) / osTotal;
-          const ratio = osRatioAveragesGlobal[osKey][key];
+          const ratio =
+            campaignRatioAverages[osKey][key] ??
+            networkRatioAverages[osKey][key] ??
+            osRatioAveragesGlobal[osKey][key];
           if (ratio) {
             blended += ratio * weight;
             usedWeight += weight;
+            activeRatioSummary[osKey][key] = ratio;
           }
         });
         if (usedWeight > 0) {
@@ -511,10 +544,10 @@ export default function Page() {
       periodRoas: roasMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
-      ratioSummary: osRatioAveragesGlobal,
+      ratioSummary: activeRatioSummary,
       maxRoas: currentMax
     };
-  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly]);
+  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks]);
 
   return (
     <main className="layout">
@@ -692,8 +725,8 @@ export default function Page() {
                   contaminados por ventanas incompletas.
                 </li>
                 <li>
-                  El ratio se calcula por <b>OS</b> (Android/iOS) usando <b>toda la data del OS</b> dentro del rango de
-                  fechas (no solo la data de la network/campaña filtrada).
+                  Fallback jerárquico de ratios por OS: <b>campaña → network → OS global</b>. Si hay ratio suficiente
+                  a nivel campaña usamos ese; si no, subimos a network; si tampoco hay, usamos OS global.
                 </li>
                 <li>Solo usamos saltos con muestra mínima (>=6 puntos) para evitar ratios inestables.</li>
                 <li>
