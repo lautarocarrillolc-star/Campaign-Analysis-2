@@ -198,10 +198,54 @@ export default function Page() {
   const [maturedOnly, setMaturedOnly] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [enablePrediction, setEnablePrediction] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
   }, [isDarkMode]);
+
+  const applyParsedCsv = (result: Papa.ParseResult<CsvRow>, label: string) => {
+    const fields = result.meta.fields ?? [];
+    const cohorts = fields
+      .filter((field) => field.startsWith('all_revenue_total_'))
+      .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
+
+    const parsed = result.data
+      .map((row) => {
+        const dayRaw = row.day;
+        const day = new Date(`${dayRaw}T00:00:00Z`);
+        if (!dayRaw || Number.isNaN(day.getTime())) {
+          return null;
+        }
+
+        const revenueByCohort: Record<string, number> = {};
+        cohorts.forEach((cohort) => {
+          revenueByCohort[cohort] = parseNumber(row[cohort]);
+        });
+
+        return {
+          day,
+          os: OS_MAP[row.store_type] ?? 'other',
+          network: row.channel?.trim() || 'unknown',
+          campaign: row.campaign_network?.trim() || 'unknown',
+          cost: parseNumber(row.cost),
+          revenueByCohort
+        } satisfies DataRow;
+      })
+      .filter((row): row is DataRow => row !== null)
+      .sort((a, b) => a.day.getTime() - b.day.getTime());
+
+    setRows(parsed);
+    setAvailableCohorts(cohorts);
+    setDataSourceLabel(label);
+    setLoadError(null);
+
+    if (parsed.length > 0) {
+      setFromDate(parsed[0].day.toISOString().slice(0, 10));
+      setToDate(parsed[parsed.length - 1].day.toISOString().slice(0, 10));
+    }
+  };
 
   useEffect(() => {
     Papa.parse<CsvRow>('/Campaign data.csv', {
@@ -209,46 +253,34 @@ export default function Page() {
       header: true,
       skipEmptyLines: true,
       complete: (result) => {
-        const fields = result.meta.fields ?? [];
-        const cohorts = fields
-          .filter((field) => field.startsWith('all_revenue_total_'))
-          .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
-
-        const parsed = result.data
-          .map((row) => {
-            const dayRaw = row.day;
-            const day = new Date(`${dayRaw}T00:00:00Z`);
-            if (!dayRaw || Number.isNaN(day.getTime())) {
-              return null;
-            }
-
-            const revenueByCohort: Record<string, number> = {};
-            cohorts.forEach((cohort) => {
-              revenueByCohort[cohort] = parseNumber(row[cohort]);
-            });
-
-            return {
-              day,
-              os: OS_MAP[row.store_type] ?? 'other',
-              network: row.channel?.trim() || 'unknown',
-              campaign: row.campaign_network?.trim() || 'unknown',
-              cost: parseNumber(row.cost),
-              revenueByCohort
-            } satisfies DataRow;
-          })
-          .filter((row): row is DataRow => row !== null)
-          .sort((a, b) => a.day.getTime() - b.day.getTime());
-
-        setRows(parsed);
-        setAvailableCohorts(cohorts);
-
-        if (parsed.length > 0) {
-          setFromDate(parsed[0].day.toISOString().slice(0, 10));
-          setToDate(parsed[parsed.length - 1].day.toISOString().slice(0, 10));
+        if ((result.data?.length ?? 0) === 0) {
+          setLoadError('No se pudo cargar el CSV por URL. Puedes subirlo manualmente abajo.');
+          return;
         }
+        applyParsedCsv(result, 'Campaign data.csv (public)');
+      },
+      error: () => {
+        setLoadError('No se pudo cargar el CSV por URL. Puedes subirlo manualmente abajo.');
       }
     });
   }, []);
+
+  const handleCsvUpload = (file: File) => {
+    Papa.parse<CsvRow>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        if ((result.data?.length ?? 0) === 0) {
+          setLoadError('El archivo subido no tiene filas válidas.');
+          return;
+        }
+        applyParsedCsv(result, file.name);
+      },
+      error: () => {
+        setLoadError('Error al parsear el archivo CSV subido.');
+      }
+    });
+  };
 
   const filteredByDate = useMemo(() => {
     return rows.filter((row) => {
@@ -493,6 +525,23 @@ export default function Page() {
           <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
         </label>
 
+        <label>
+          Cargar CSV
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                handleCsvUpload(file);
+              }
+            }}
+          />
+        </label>
+
+        <p className="sourceInfo">Fuente: {dataSourceLabel}</p>
+        {loadError && <p className="errorInfo">{loadError}</p>}
+
         <MultiSelect title="Sistema operativo" options={osOptions} selected={selectedOs} onChange={setSelectedOs} />
 
         <MultiSelect
@@ -527,6 +576,12 @@ export default function Page() {
       </aside>
 
       <section className="heatmapWrap">
+        {rows.length === 0 && (
+          <p className="errorInfo">
+            No hay datos cargados. Coloca <code>Campaign data.csv</code> dentro de <code>public/</code> o súbelo con
+            el selector.
+          </p>
+        )}
         <p className="legend">
           Tabla por Cohort Date: primera columna Cohort date, segunda columna Ad spend y luego ROAS en porcentaje por
           cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
@@ -610,3 +665,4 @@ export default function Page() {
     </main>
   );
 }
+
