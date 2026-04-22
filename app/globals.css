@@ -1,239 +1,712 @@
-* {
-  box-sizing: border-box;
+'use client';
+
+import Papa from 'papaparse';
+import { useEffect, useMemo, useState } from 'react';
+
+type Granularity = 'daily' | 'weekly' | 'monthly';
+
+type CsvRow = Record<string, string>;
+
+type DataRow = {
+  day: Date;
+  os: 'android' | 'ios' | 'other';
+  network: string;
+  campaign: string;
+  cost: number;
+  revenueByCohort: Record<string, number>;
+};
+
+const OS_MAP: Record<string, DataRow['os']> = {
+  google_play: 'android',
+  app_store: 'ios'
+};
+
+function parseNumber(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-:root {
-  --bg: #fafafa;
-  --panel: #ffffff;
-  --text: #18181b;
-  --muted: #3f3f46;
-  --border: #e4e4e7;
-  --border-soft: #d4d4d8;
-  --thead: #f4f4f5;
-}
-
-body[data-theme='dark'] {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --text: #f4f4f5;
-  --muted: #a1a1aa;
-  --border: #2b3340;
-  --border-soft: #3b4250;
-  --thead: #202634;
-}
-
-body {
-  margin: 0;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  transition: background 260ms ease, color 260ms ease;
-}
-
-.layout {
-  display: grid;
-  grid-template-columns: 310px 1fr;
-  min-height: 100vh;
-}
-
-.filters {
-  border-right: 1px solid var(--border);
-  padding: 24px;
-  background: var(--panel);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  transition: background 260ms ease, border-color 260ms ease;
-}
-
-.titleRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-}
-
-.filters h1 {
-  margin: 0 0 6px;
-  font-size: 24px;
-}
-
-.modeBtn {
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  padding: 7px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 220ms ease;
-}
-
-.modeBtn:hover {
-  transform: translateY(-1px);
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-select,
-input {
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  min-height: 38px;
-  padding: 7px 10px;
-  font-size: 14px;
-  background: var(--panel);
-  color: var(--text);
-  transition: all 220ms ease;
-}
-
-.multiSelect {
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.multiSelect summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.multiSelect summary::-webkit-details-marker {
-  display: none;
-}
-
-.selectedValue {
-  color: var(--muted);
-  font-weight: 500;
-  font-size: 12px;
-}
-
-.multiSelectList {
-  border-top: 1px solid var(--border);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 190px;
-  overflow: auto;
-}
-
-.searchInput {
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  min-height: 32px;
-  padding: 6px 8px;
-  font-size: 12px;
-}
-
-.optionRow {
-  display: flex;
-  flex-direction: row;
-  gap: 8px;
-  align-items: center;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.clearBtn {
-  background: var(--thead);
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  margin-bottom: 4px;
-}
-
-.toggleRow {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-}
-
-.heatmapWrap {
-  padding: 18px 20px;
-}
-
-.legend {
-  margin: 0 0 12px;
-  color: var(--muted);
-}
-
-.sourceInfo {
-  margin: 0;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.errorInfo {
-  margin: 0;
-  font-size: 12px;
-  color: #ef4444;
-}
-
-.heatmapScroll {
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
-  transition: all 260ms ease;
-}
-
-.heatmap {
-  border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
-}
-
-.heatmap th,
-.heatmap td {
-  border: 1px solid var(--border);
-  padding: 8px;
-  text-align: center;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.heatmap thead th {
-  background: var(--thead);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.predictedCell {
-  border-style: dashed !important;
-  border-width: 2px !important;
-  opacity: 0.92;
-}
-
-.heatmap tbody th {
-  position: sticky;
-  left: 0;
-  background: var(--bg);
-}
-
-@media (max-width: 950px) {
-  .layout {
-    grid-template-columns: 1fr;
+function periodKey(day: Date, granularity: Granularity): string {
+  if (granularity === 'daily') {
+    return day.toISOString().slice(0, 10);
   }
 
-  .filters {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+  if (granularity === 'monthly') {
+    return `${day.getUTCFullYear()}-${String(day.getUTCMonth() + 1).padStart(2, '0')}`;
   }
+
+  const date = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 }
+
+function heatmapStyle(
+  value: number | null,
+  maxRoas: number,
+  isDarkMode: boolean
+): { backgroundColor: string; color: string } {
+  if (value === null) {
+    return {
+      backgroundColor: isDarkMode ? '#2a2f3a' : '#f4f4f5',
+      color: isDarkMode ? '#cfd5e1' : '#3f3f46'
+    };
+  }
+  const ratio = maxRoas > 0 ? Math.min(value / maxRoas, 1) : 0;
+  const hue = 20 + 100 * ratio;
+  const saturation = isDarkMode ? 68 : 72;
+  const lightness = isDarkMode ? 22 + ratio * 28 : 92 - ratio * 40;
+  const textColor = isDarkMode
+    ? lightness >= 38
+      ? '#0b1220'
+      : '#f8fafc'
+    : lightness >= 62
+      ? '#111827'
+      : '#f8fafc';
+  return {
+    backgroundColor: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
+    color: textColor
+  };
+}
+
+function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'network' | 'campaign'>): string[] {
+  return Array.from(new Set(rows.map((row) => String(row[field])))).sort((a, b) => a.localeCompare(b));
+}
+
+function formatCohort(cohortKey: string): string {
+  return `ROAS ${cohortKey.replace('all_revenue_total_', '').toUpperCase()}`;
+}
+
+function cohortSortValue(cohortKey: string): number {
+  const raw = cohortKey.replace('all_revenue_total_', '').toLowerCase();
+  if (raw.startsWith('d')) {
+    const day = Number(raw.slice(1));
+    return Number.isFinite(day) ? day : Number.MAX_SAFE_INTEGER - 1;
+  }
+  if (raw.startsWith('m')) {
+    const month = Number(raw.slice(1));
+    return Number.isFinite(month) ? month * 30 : Number.MAX_SAFE_INTEGER;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function cohortWindowDays(cohortKey: string): number {
+  const raw = cohortKey.replace('all_revenue_total_', '').toLowerCase();
+  if (raw.startsWith('d')) {
+    const day = Number(raw.slice(1));
+    return Number.isFinite(day) ? day : 0;
+  }
+  if (raw.startsWith('m')) {
+    const month = Number(raw.slice(1));
+    return Number.isFinite(month) ? month * 30 : 0;
+  }
+  return 0;
+}
+
+function ratioKey(from: string, to: string): string {
+  return `${from}=>${to}`;
+}
+
+function matchesSelection(value: string, selectedValues: string[]): boolean {
+  return selectedValues.length === 0 || selectedValues.includes(value);
+}
+
+function toggleValue(current: string[], value: string): string[] {
+  return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+}
+
+function selectionText(selected: string[]): string {
+  if (selected.length === 0) {
+    return 'Todos';
+  }
+  if (selected.length === 1) {
+    return selected[0];
+  }
+  return `${selected.length} seleccionados`;
+}
+
+function MultiSelect({
+  title,
+  options,
+  selected,
+  onChange,
+  searchable = false
+}: {
+  title: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  searchable?: boolean;
+}) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const visibleOptions = useMemo(() => {
+    const normalized = searchTerm.trim().toLowerCase();
+    if (!normalized) {
+      return options;
+    }
+    return options.filter((option) => option.toLowerCase().includes(normalized));
+  }, [options, searchTerm]);
+
+  return (
+    <details className="multiSelect" open>
+      <summary>
+        <span>{title}</span>
+        <span className="selectedValue">{selectionText(selected)}</span>
+      </summary>
+      <div className="multiSelectList">
+        {searchable && (
+          <input
+            className="searchInput"
+            type="text"
+            placeholder={`Buscar ${title.toLowerCase()}...`}
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        )}
+        <button type="button" className="clearBtn" onClick={() => onChange([])}>
+          Seleccionar todo
+        </button>
+        {visibleOptions.map((option) => {
+          const checked = selected.includes(option);
+          return (
+            <label key={option} className="optionRow">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onChange(toggleValue(selected, option))}
+              />
+              <span>{option}</span>
+            </label>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+export default function Page() {
+  const [rows, setRows] = useState<DataRow[]>([]);
+  const [availableCohorts, setAvailableCohorts] = useState<string[]>([]);
+  const [granularity, setGranularity] = useState<Granularity>('daily');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [selectedOs, setSelectedOs] = useState<string[]>([]);
+  const [selectedNetworks, setSelectedNetworks] = useState<string[]>([]);
+  const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [maturedOnly, setMaturedOnly] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [enablePrediction, setEnablePrediction] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
+
+  useEffect(() => {
+    document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
+  }, [isDarkMode]);
+
+  const applyParsedCsv = (result: Papa.ParseResult<CsvRow>, label: string) => {
+    const fields = result.meta.fields ?? [];
+    const cohorts = fields
+      .filter((field) => field.startsWith('all_revenue_total_'))
+      .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
+
+    const parsed = result.data
+      .map((row) => {
+        const dayRaw = row.day;
+        const day = new Date(`${dayRaw}T00:00:00Z`);
+        if (!dayRaw || Number.isNaN(day.getTime())) {
+          return null;
+        }
+
+        const revenueByCohort: Record<string, number> = {};
+        cohorts.forEach((cohort) => {
+          revenueByCohort[cohort] = parseNumber(row[cohort]);
+        });
+
+        return {
+          day,
+          os: OS_MAP[row.store_type] ?? 'other',
+          network: row.channel?.trim() || 'unknown',
+          campaign: row.campaign_network?.trim() || 'unknown',
+          cost: parseNumber(row.cost),
+          revenueByCohort
+        } satisfies DataRow;
+      })
+      .filter((row): row is DataRow => row !== null)
+      .sort((a, b) => a.day.getTime() - b.day.getTime());
+
+    setRows(parsed);
+    setAvailableCohorts(cohorts);
+    setDataSourceLabel(label);
+    setLoadError(null);
+
+    if (parsed.length > 0) {
+      setFromDate(parsed[0].day.toISOString().slice(0, 10));
+      setToDate(parsed[parsed.length - 1].day.toISOString().slice(0, 10));
+    }
+  };
+
+  useEffect(() => {
+    Papa.parse<CsvRow>('/Campaign data.csv', {
+      download: true,
+      header: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        if ((result.data?.length ?? 0) === 0) {
+          setLoadError('No se pudo cargar el CSV por URL. Puedes subirlo manualmente abajo.');
+          return;
+        }
+        applyParsedCsv(result, 'Campaign data.csv (public)');
+      },
+      error: () => {
+        setLoadError('No se pudo cargar el CSV por URL. Puedes subirlo manualmente abajo.');
+      }
+    });
+  }, []);
+
+  const handleCsvUpload = (file: File) => {
+    Papa.parse<CsvRow>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        if ((result.data?.length ?? 0) === 0) {
+          setLoadError('El archivo subido no tiene filas válidas.');
+          return;
+        }
+        applyParsedCsv(result, file.name);
+      },
+      error: () => {
+        setLoadError('Error al parsear el archivo CSV subido.');
+      }
+    });
+  };
+
+  const filteredByDate = useMemo(() => {
+    return rows.filter((row) => {
+      const value = row.day.toISOString().slice(0, 10);
+      if (fromDate && value < fromDate) {
+        return false;
+      }
+      if (toDate && value > toDate) {
+        return false;
+      }
+      return true;
+    });
+  }, [rows, fromDate, toDate]);
+
+  const osOptions = useMemo(() => optionValues(filteredByDate, 'os'), [filteredByDate]);
+
+  const networkOptions = useMemo(() => {
+    const source = filteredByDate.filter((row) => matchesSelection(row.os, selectedOs));
+    return optionValues(source, 'network');
+  }, [filteredByDate, selectedOs]);
+
+  const campaignOptions = useMemo(() => {
+    const source = filteredByDate.filter(
+      (row) => matchesSelection(row.os, selectedOs) && matchesSelection(row.network, selectedNetworks)
+    );
+    return optionValues(source, 'campaign');
+  }, [filteredByDate, selectedOs, selectedNetworks]);
+
+  useEffect(() => {
+    setSelectedOs((current) => current.filter((value) => osOptions.includes(value)));
+  }, [osOptions]);
+
+  useEffect(() => {
+    setSelectedNetworks((current) => current.filter((value) => networkOptions.includes(value)));
+  }, [networkOptions]);
+
+  useEffect(() => {
+    setSelectedCampaigns((current) => current.filter((value) => campaignOptions.includes(value)));
+  }, [campaignOptions]);
+
+  const scopedRows = useMemo(() => {
+    return filteredByDate.filter(
+      (row) =>
+        matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.network, selectedNetworks) &&
+        matchesSelection(row.campaign, selectedCampaigns)
+    );
+  }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
+
+  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas } = useMemo(() => {
+    const periodAggregation = new Map<
+      string,
+      {
+        totalCost: number;
+        revenueByCohort: Record<string, number>;
+        cohortCost: Record<string, number>;
+        osCost: Record<string, number>;
+      }
+    >();
+    const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const osRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+
+    const cohortPairs = availableCohorts
+      .slice(0, -1)
+      .map((cohort, index) => [cohort, availableCohorts[index + 1]] as const);
+
+    for (const row of scopedRows) {
+      const period = periodKey(row.day, granularity);
+      const current = periodAggregation.get(period) ?? {
+        totalCost: 0,
+        revenueByCohort: {},
+        cohortCost: {},
+        osCost: {}
+      };
+      current.totalCost += row.cost;
+      current.osCost[row.os] = (current.osCost[row.os] ?? 0) + row.cost;
+
+      for (const cohort of availableCohorts) {
+        const daysNeeded = cohortWindowDays(cohort);
+        const msNeeded = daysNeeded * 86400000;
+        const isMatured = row.day.getTime() + msNeeded <= maxAvailableDay.getTime();
+        if (!maturedOnly || isMatured) {
+          current.revenueByCohort[cohort] =
+            (current.revenueByCohort[cohort] ?? 0) + (row.revenueByCohort[cohort] ?? 0);
+          current.cohortCost[cohort] = (current.cohortCost[cohort] ?? 0) + row.cost;
+        }
+      }
+
+      cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const toDays = cohortWindowDays(toCohort);
+        const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDay.getTime();
+        const fromValue = row.revenueByCohort[fromCohort] ?? 0;
+        const toValue = row.revenueByCohort[toCohort] ?? 0;
+        if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
+          const key = ratioKey(fromCohort, toCohort);
+          const entry = osRatioAccumulator[row.os][key] ?? { total: 0, count: 0 };
+          entry.total += toValue / fromValue;
+          entry.count += 1;
+          osRatioAccumulator[row.os][key] = entry;
+        }
+      });
+
+      periodAggregation.set(period, current);
+    }
+
+    const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
+    const costMap = new Map<string, number>();
+    const roasMap = new Map<string, number | null>();
+    const predictedRoasMap = new Map<string, number | null>();
+    const predictedMaskMap = new Map<string, boolean>();
+    let currentMax = 0;
+
+    const osRatioAverages: Record<string, Record<string, number>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+    (['android', 'ios', 'other'] as const).forEach((osKey) => {
+      Object.entries(osRatioAccumulator[osKey]).forEach(([key, value]) => {
+        if (value.count > 0) {
+          osRatioAverages[osKey][key] = value.total / value.count;
+        }
+      });
+    });
+
+    periods.forEach((period) => {
+      const values = periodAggregation.get(period);
+      if (!values) return;
+      costMap.set(period, values.totalCost);
+
+      availableCohorts.forEach((cohort) => {
+        const revenue = values.revenueByCohort[cohort] ?? 0;
+        const eligibleCost = values.cohortCost[cohort] ?? 0;
+        const roas = eligibleCost === 0 ? null : revenue / eligibleCost;
+        roasMap.set(`${period}|||${cohort}`, roas);
+        if (roas !== null) {
+          currentMax = Math.max(currentMax, roas);
+        }
+      });
+
+      const osTotal = values.totalCost || 1;
+      const periodRatios: Record<string, number> = {};
+      cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const key = ratioKey(fromCohort, toCohort);
+        let blended = 0;
+        let usedWeight = 0;
+        (['android', 'ios', 'other'] as const).forEach((osKey) => {
+          const weight = (values.osCost[osKey] ?? 0) / osTotal;
+          const ratio = osRatioAverages[osKey][key];
+          if (ratio) {
+            blended += ratio * weight;
+            usedWeight += weight;
+          }
+        });
+        if (usedWeight > 0) {
+          periodRatios[key] = blended / usedWeight;
+        }
+      });
+
+      availableCohorts.forEach((cohort, cohortIndex) => {
+        const cellKey = `${period}|||${cohort}`;
+        const actualValue = roasMap.get(cellKey) ?? null;
+        if (actualValue !== null) {
+          predictedRoasMap.set(cellKey, actualValue);
+          predictedMaskMap.set(cellKey, false);
+          return;
+        }
+
+        let estimated: number | null = null;
+        for (let prevIndex = cohortIndex - 1; prevIndex >= 0; prevIndex -= 1) {
+          const prevCohort = availableCohorts[prevIndex];
+          const prevValue = predictedRoasMap.get(`${period}|||${prevCohort}`) ?? roasMap.get(`${period}|||${prevCohort}`) ?? null;
+          if (prevValue === null) {
+            continue;
+          }
+          let projection = prevValue;
+          let canProject = true;
+          for (let stepIndex = prevIndex; stepIndex < cohortIndex; stepIndex += 1) {
+            const fromCohort = availableCohorts[stepIndex];
+            const toCohort = availableCohorts[stepIndex + 1];
+            const stepRatio = periodRatios[ratioKey(fromCohort, toCohort)];
+            if (!stepRatio) {
+              canProject = false;
+              break;
+            }
+            projection *= stepRatio;
+          }
+          if (canProject) {
+            estimated = projection;
+            break;
+          }
+        }
+
+        predictedRoasMap.set(cellKey, estimated);
+        predictedMaskMap.set(cellKey, estimated !== null);
+        if (estimated !== null) {
+          currentMax = Math.max(currentMax, estimated);
+        }
+      });
+    });
+
+    return {
+      orderedPeriods: periods,
+      periodCost: costMap,
+      periodRoas: roasMap,
+      predictedRoas: predictedRoasMap,
+      predictedMask: predictedMaskMap,
+      ratioSummary: osRatioAverages,
+      maxRoas: currentMax
+    };
+  }, [scopedRows, granularity, availableCohorts, maturedOnly]);
+
+  return (
+    <main className="layout">
+      <aside className="filters">
+        <div className="titleRow">
+          <h1>ROAS Heatmap</h1>
+          <button className="modeBtn" type="button" onClick={() => setIsDarkMode((current) => !current)}>
+            {isDarkMode ? 'Light mode' : 'Dark mode'}
+          </button>
+        </div>
+
+        <label>
+          Tipo de fecha
+          <select value={granularity} onChange={(event) => setGranularity(event.target.value as Granularity)}>
+            <option value="daily">Diario</option>
+            <option value="weekly">Semanal</option>
+            <option value="monthly">Mensual</option>
+          </select>
+        </label>
+
+        <label>
+          Fecha desde
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+        </label>
+
+        <label>
+          Fecha hasta
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+        </label>
+
+        <label>
+          Cargar CSV
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                handleCsvUpload(file);
+              }
+            }}
+          />
+        </label>
+
+        <p className="sourceInfo">Fuente: {dataSourceLabel}</p>
+        {loadError && <p className="errorInfo">{loadError}</p>}
+
+        <MultiSelect title="Sistema operativo" options={osOptions} selected={selectedOs} onChange={setSelectedOs} />
+
+        <MultiSelect
+          title="Network"
+          options={networkOptions}
+          selected={selectedNetworks}
+          onChange={setSelectedNetworks}
+          searchable
+        />
+
+        <MultiSelect
+          title="Campaña"
+          options={campaignOptions}
+          selected={selectedCampaigns}
+          onChange={setSelectedCampaigns}
+          searchable
+        />
+
+        <label className="toggleRow">
+          <input type="checkbox" checked={maturedOnly} onChange={(event) => setMaturedOnly(event.target.checked)} />
+          <span>Maturated cohorts only? (full windows)</span>
+        </label>
+
+        <label className="toggleRow">
+          <input
+            type="checkbox"
+            checked={enablePrediction}
+            onChange={(event) => setEnablePrediction(event.target.checked)}
+          />
+          <span>Enable prediction</span>
+        </label>
+      </aside>
+
+      <section className="heatmapWrap">
+        {rows.length === 0 && (
+          <p className="errorInfo">
+            No hay datos cargados. Coloca <code>Campaign data.csv</code> dentro de <code>public/</code> o súbelo con
+            el selector.
+          </p>
+        )}
+        <p className="legend">
+          Tabla por Cohort Date: primera columna Cohort date, segunda columna Ad spend y luego ROAS en porcentaje por
+          cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
+          completas.
+        </p>
+        <div className="heatmapScroll">
+          <table className="heatmap">
+            <thead>
+              <tr>
+                <th>Cohort date</th>
+                <th>Ad spend</th>
+                {availableCohorts.map((cohort) => (
+                  <th key={cohort}>{formatCohort(cohort)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {orderedPeriods.map((period) => (
+                <tr key={period}>
+                  <th>{period}</th>
+                  <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                  {availableCohorts.map((cohort) => {
+                    const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
+                    return (
+                      <td key={`${period}-${cohort}`} style={heatmapStyle(value, maxRoas, isDarkMode)}>
+                        {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {enablePrediction && (
+          <>
+            <p className="legend">
+              Heatmap con predicción: usa valores reales cuando existen y completa faltantes de forma secuencial por
+              ratios de progresión (segmentado por OS). Las predicciones tienen * y borde punteado.
+            </p>
+            <div className="heatmapScroll">
+              <table className="heatmap">
+                <thead>
+                  <tr>
+                    <th>Cohort date</th>
+                    <th>Ad spend</th>
+                    {availableCohorts.map((cohort) => (
+                      <th key={`pred-${cohort}`}>{formatCohort(cohort)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderedPeriods.map((period) => (
+                    <tr key={`pred-${period}`}>
+                      <th>{period}</th>
+                      <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                      {availableCohorts.map((cohort) => {
+                        const cellKey = `${period}|||${cohort}`;
+                        const value = predictedRoas.get(cellKey) ?? null;
+                        const isPredicted = predictedMask.get(cellKey) ?? false;
+                        return (
+                          <td
+                            key={`pred-${period}-${cohort}`}
+                            className={isPredicted ? 'predictedCell' : undefined}
+                            style={heatmapStyle(value, maxRoas, isDarkMode)}
+                            title={isPredicted ? 'Predicted value' : 'Actual value'}
+                          >
+                            {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="predictionExplain">
+              <h3>¿Cómo se calcula la predicción?</h3>
+              <ol>
+                <li>
+                  Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>.
+                </li>
+                <li>
+                  Excluimos casos donde el revenue del cohort siguiente es menor al anterior para evitar ratios
+                  contaminados por ventanas incompletas.
+                </li>
+                <li>
+                  El ratio se calcula por <b>OS</b> (Android/iOS). Si el filtro es Unity + Android, usamos solo ratios
+                  Android de Unity; si es Unity + iOS, usamos solo iOS.
+                </li>
+                <li>
+                  Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
+                  <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.
+                </li>
+                <li>
+                  Si faltan pasos intermedios, encadenamos múltiples ratios:
+                  <code>ROAS D120 = D30 × r(D30→D60) × r(D60→D90) × r(D90→D120)</code>.
+                </li>
+              </ol>
+
+              <p className="ratioTitle">Ratios vigentes en esta vista (según filtros actuales):</p>
+              <ul>
+                {(['android', 'ios', 'other'] as const).map((osKey) => {
+                  const pairs = Object.entries(ratioSummary[osKey]);
+                  return (
+                    <li key={`ratio-${osKey}`}>
+                      <b>{osKey.toUpperCase()}:</b>{' '}
+                      {pairs.length === 0
+                        ? 'sin ratios suficientes'
+                        : pairs
+                            .map(([pair, ratio]) => `${pair.replace('all_revenue_total_', '').toUpperCase()}=${ratio.toFixed(3)}`)
+                            .join(' | ')}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
 
