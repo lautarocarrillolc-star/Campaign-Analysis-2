@@ -105,6 +105,10 @@ function cohortWindowDays(cohortKey: string): number {
   return 0;
 }
 
+function ratioKey(from: string, to: string): string {
+  return `${from}=>${to}`;
+}
+
 function matchesSelection(value: string, selectedValues: string[]): boolean {
   return selectedValues.length === 0 || selectedValues.includes(value);
 }
@@ -193,6 +197,7 @@ export default function Page() {
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [maturedOnly, setMaturedOnly] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [enablePrediction, setEnablePrediction] = useState(false);
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -293,21 +298,37 @@ export default function Page() {
     );
   }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
 
-  const { orderedPeriods, periodCost, periodRoas, maxRoas } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, maxRoas } = useMemo(() => {
     const periodAggregation = new Map<
       string,
       {
         totalCost: number;
         revenueByCohort: Record<string, number>;
         cohortCost: Record<string, number>;
+        osCost: Record<string, number>;
       }
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const osRatioAccumulator: Record<string, Record<string, { total: number; count: number }>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+
+    const cohortPairs = availableCohorts
+      .slice(0, -1)
+      .map((cohort, index) => [cohort, availableCohorts[index + 1]] as const);
 
     for (const row of scopedRows) {
       const period = periodKey(row.day, granularity);
-      const current = periodAggregation.get(period) ?? { totalCost: 0, revenueByCohort: {}, cohortCost: {} };
+      const current = periodAggregation.get(period) ?? {
+        totalCost: 0,
+        revenueByCohort: {},
+        cohortCost: {},
+        osCost: {}
+      };
       current.totalCost += row.cost;
+      current.osCost[row.os] = (current.osCost[row.os] ?? 0) + row.cost;
 
       for (const cohort of availableCohorts) {
         const daysNeeded = cohortWindowDays(cohort);
@@ -320,13 +341,42 @@ export default function Page() {
         }
       }
 
+      cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const toDays = cohortWindowDays(toCohort);
+        const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDay.getTime();
+        const fromValue = row.revenueByCohort[fromCohort] ?? 0;
+        const toValue = row.revenueByCohort[toCohort] ?? 0;
+        if (toIsMatured && fromValue > 0 && toValue > 0) {
+          const key = ratioKey(fromCohort, toCohort);
+          const entry = osRatioAccumulator[row.os][key] ?? { total: 0, count: 0 };
+          entry.total += toValue / fromValue;
+          entry.count += 1;
+          osRatioAccumulator[row.os][key] = entry;
+        }
+      });
+
       periodAggregation.set(period, current);
     }
 
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
     const roasMap = new Map<string, number | null>();
+    const predictedRoasMap = new Map<string, number | null>();
+    const predictedMaskMap = new Map<string, boolean>();
     let currentMax = 0;
+
+    const osRatioAverages: Record<string, Record<string, number>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+    (['android', 'ios', 'other'] as const).forEach((osKey) => {
+      Object.entries(osRatioAccumulator[osKey]).forEach(([key, value]) => {
+        if (value.count > 0) {
+          osRatioAverages[osKey][key] = value.total / value.count;
+        }
+      });
+    });
 
     periods.forEach((period) => {
       const values = periodAggregation.get(period);
@@ -342,12 +392,74 @@ export default function Page() {
           currentMax = Math.max(currentMax, roas);
         }
       });
+
+      const osTotal = values.totalCost || 1;
+      const periodRatios: Record<string, number> = {};
+      cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const key = ratioKey(fromCohort, toCohort);
+        let blended = 0;
+        let usedWeight = 0;
+        (['android', 'ios', 'other'] as const).forEach((osKey) => {
+          const weight = (values.osCost[osKey] ?? 0) / osTotal;
+          const ratio = osRatioAverages[osKey][key];
+          if (ratio) {
+            blended += ratio * weight;
+            usedWeight += weight;
+          }
+        });
+        if (usedWeight > 0) {
+          periodRatios[key] = blended / usedWeight;
+        }
+      });
+
+      availableCohorts.forEach((cohort, cohortIndex) => {
+        const cellKey = `${period}|||${cohort}`;
+        const actualValue = roasMap.get(cellKey) ?? null;
+        if (actualValue !== null) {
+          predictedRoasMap.set(cellKey, actualValue);
+          predictedMaskMap.set(cellKey, false);
+          return;
+        }
+
+        let estimated: number | null = null;
+        for (let prevIndex = cohortIndex - 1; prevIndex >= 0; prevIndex -= 1) {
+          const prevCohort = availableCohorts[prevIndex];
+          const prevValue = predictedRoasMap.get(`${period}|||${prevCohort}`) ?? roasMap.get(`${period}|||${prevCohort}`) ?? null;
+          if (prevValue === null) {
+            continue;
+          }
+          let projection = prevValue;
+          let canProject = true;
+          for (let stepIndex = prevIndex; stepIndex < cohortIndex; stepIndex += 1) {
+            const fromCohort = availableCohorts[stepIndex];
+            const toCohort = availableCohorts[stepIndex + 1];
+            const stepRatio = periodRatios[ratioKey(fromCohort, toCohort)];
+            if (!stepRatio) {
+              canProject = false;
+              break;
+            }
+            projection *= stepRatio;
+          }
+          if (canProject) {
+            estimated = projection;
+            break;
+          }
+        }
+
+        predictedRoasMap.set(cellKey, estimated);
+        predictedMaskMap.set(cellKey, estimated !== null);
+        if (estimated !== null) {
+          currentMax = Math.max(currentMax, estimated);
+        }
+      });
     });
 
     return {
       orderedPeriods: periods,
       periodCost: costMap,
       periodRoas: roasMap,
+      predictedRoas: predictedRoasMap,
+      predictedMask: predictedMaskMap,
       maxRoas: currentMax
     };
   }, [scopedRows, granularity, availableCohorts, maturedOnly]);
@@ -403,6 +515,15 @@ export default function Page() {
           <input type="checkbox" checked={maturedOnly} onChange={(event) => setMaturedOnly(event.target.checked)} />
           <span>Maturated cohorts only? (full windows)</span>
         </label>
+
+        <label className="toggleRow">
+          <input
+            type="checkbox"
+            checked={enablePrediction}
+            onChange={(event) => setEnablePrediction(event.target.checked)}
+          />
+          <span>Enable prediction</span>
+        </label>
       </aside>
 
       <section className="heatmapWrap">
@@ -439,6 +560,51 @@ export default function Page() {
             </tbody>
           </table>
         </div>
+
+        {enablePrediction && (
+          <>
+            <p className="legend">
+              Heatmap con predicción: usa valores reales cuando existen y completa faltantes de forma secuencial por
+              ratios de progresión (segmentado por OS). Las predicciones tienen * y borde punteado.
+            </p>
+            <div className="heatmapScroll">
+              <table className="heatmap">
+                <thead>
+                  <tr>
+                    <th>Cohort date</th>
+                    <th>Ad spend</th>
+                    {availableCohorts.map((cohort) => (
+                      <th key={`pred-${cohort}`}>{formatCohort(cohort)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderedPeriods.map((period) => (
+                    <tr key={`pred-${period}`}>
+                      <th>{period}</th>
+                      <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                      {availableCohorts.map((cohort) => {
+                        const cellKey = `${period}|||${cohort}`;
+                        const value = predictedRoas.get(cellKey) ?? null;
+                        const isPredicted = predictedMask.get(cellKey) ?? false;
+                        return (
+                          <td
+                            key={`pred-${period}-${cohort}`}
+                            className={isPredicted ? 'predictedCell' : undefined}
+                            style={heatmapStyle(value, maxRoas, isDarkMode)}
+                            title={isPredicted ? 'Predicted value' : 'Actual value'}
+                          >
+                            {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </section>
     </main>
   );
