@@ -361,7 +361,7 @@ export default function Page() {
     const networkRatioAccumulator = createAccumulator();
     const countryRatioAccumulator: Record<
       string,
-      Record<string, Record<string, Array<{ ratio: number; weight: number }>>
+      Record<string, Record<string, Array<{ ratio: number; weight: number }>>>
     > = { android: {}, ios: {}, other: {} };
     const osRatioAccumulator = createAccumulator();
 
