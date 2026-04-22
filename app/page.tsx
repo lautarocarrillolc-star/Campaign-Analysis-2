@@ -10,6 +10,7 @@ type CsvRow = Record<string, string>;
 type DataRow = {
   day: Date;
   os: 'android' | 'ios' | 'other';
+  country: string;
   network: string;
   campaign: string;
   cost: number;
@@ -37,10 +38,8 @@ function periodKey(day: Date, granularity: Granularity): string {
 
   const date = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
   const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+  date.setUTCDate(date.getUTCDate() - dayNum + 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function heatmapStyle(
@@ -105,6 +104,17 @@ function cohortWindowDays(cohortKey: string): number {
 
 function ratioKey(from: string, to: string): string {
   return `${from}=>${to}`;
+}
+
+function deriveCountry(row: CsvRow): string {
+  const explicit =
+    row.country || row.country_code || row.countryCode || row.geo || row.region || row.market;
+  if (explicit && explicit.trim()) {
+    return explicit.trim().toUpperCase();
+  }
+  const campaign = row.campaign_network || '';
+  const match = campaign.match(/(?:^|[^A-Z])([A-Z]{2})(?:[^A-Z]|$)/);
+  return match?.[1] ?? 'UNKNOWN';
 }
 
 function matchesSelection(value: string, selectedValues: string[]): boolean {
@@ -225,6 +235,7 @@ export default function Page() {
         return {
           day,
           os: OS_MAP[row.store_type] ?? 'other',
+          country: deriveCountry(row),
           network: row.channel?.trim() || 'unknown',
           campaign: row.campaign_network?.trim() || 'unknown',
           cost: parseNumber(row.cost),
@@ -336,6 +347,7 @@ export default function Page() {
         revenueByCohort: Record<string, number>;
         cohortCost: Record<string, number>;
         osCost: Record<string, number>;
+        osCountryCost: Record<string, Record<string, number>>;
       }
     >();
     const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
@@ -347,6 +359,10 @@ export default function Page() {
     });
     const campaignRatioAccumulator = createAccumulator();
     const networkRatioAccumulator = createAccumulator();
+    const countryRatioAccumulator: Record<
+      string,
+      Record<string, Record<string, Array<{ ratio: number; weight: number }>>
+    > = { android: {}, ios: {}, other: {} };
     const osRatioAccumulator = createAccumulator();
 
     const cohortPairs = availableCohorts
@@ -380,10 +396,14 @@ export default function Page() {
         totalCost: 0,
         revenueByCohort: {},
         cohortCost: {},
-        osCost: {}
+        osCost: {},
+        osCountryCost: {}
       };
       current.totalCost += row.cost;
       current.osCost[row.os] = (current.osCost[row.os] ?? 0) + row.cost;
+      const osCountry = current.osCountryCost[row.os] ?? {};
+      osCountry[row.country] = (osCountry[row.country] ?? 0) + row.cost;
+      current.osCountryCost[row.os] = osCountry;
 
       for (const cohort of availableCohorts) {
         const daysNeeded = cohortWindowDays(cohort);
@@ -406,11 +426,27 @@ export default function Page() {
       selectedNetworks.length > 0
         ? filteredByDate.filter((row) => selectedNetworks.includes(row.network))
         : [];
+    const countryRows = filteredByDate;
 
     accumulateRatios(campaignRows, campaignRatioAccumulator, maxAvailableDayGlobal);
     accumulateRatios(networkRows, networkRatioAccumulator, maxAvailableDayGlobal);
-    accumulateRatios(filteredByDate, osRatioAccumulator, maxAvailableDayGlobal);
-
+    accumulateRatios(countryRows, osRatioAccumulator, maxAvailableDayGlobal);
+    for (const row of countryRows) {
+      const bucket = countryRatioAccumulator[row.os][row.country] ?? {};
+      countryRatioAccumulator[row.os][row.country] = bucket;
+      cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const toDays = cohortWindowDays(toCohort);
+        const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDayGlobal.getTime();
+        const fromValue = row.revenueByCohort[fromCohort] ?? 0;
+        const toValue = row.revenueByCohort[toCohort] ?? 0;
+        if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
+          const key = ratioKey(fromCohort, toCohort);
+          const entry = bucket[key] ?? [];
+          entry.push({ ratio: toValue / fromValue, weight: Math.max(row.cost, 1) });
+          bucket[key] = entry;
+        }
+      });
+    }
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
     const roasMap = new Map<string, number | null>();
@@ -451,6 +487,39 @@ export default function Page() {
     const campaignRatioAverages = buildWeightedMedianAverages(campaignRatioAccumulator);
     const networkRatioAverages = buildWeightedMedianAverages(networkRatioAccumulator);
     const osRatioAveragesGlobal = buildWeightedMedianAverages(osRatioAccumulator);
+    const countryRatioAverages: Record<string, Record<string, Record<string, number>>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+    const buildCountryMedian = (
+      data: Record<string, Array<{ ratio: number; weight: number }>>
+    ): Record<string, number> => {
+      const output: Record<string, number> = {};
+      Object.entries(data).forEach(([key, samples]) => {
+        if (samples.length >= 6) {
+          const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
+          const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
+          const halfWeight = totalWeight / 2;
+          let running = 0;
+          let weightedMedian = sorted[sorted.length - 1].ratio;
+          for (const sample of sorted) {
+            running += sample.weight;
+            if (running >= halfWeight) {
+              weightedMedian = sample.ratio;
+              break;
+            }
+          }
+          output[key] = weightedMedian;
+        }
+      });
+      return output;
+    };
+    (['android', 'ios', 'other'] as const).forEach((osKey) => {
+      Object.entries(countryRatioAccumulator[osKey]).forEach(([country, data]) => {
+        countryRatioAverages[osKey][country] = buildCountryMedian(data);
+      });
+    });
 
     const activeRatioSummary: Record<string, Record<string, number>> = {
       android: {},
@@ -481,9 +550,13 @@ export default function Page() {
         let usedWeight = 0;
         (['android', 'ios', 'other'] as const).forEach((osKey) => {
           const weight = (values.osCost[osKey] ?? 0) / osTotal;
+          const countryCostMap = values.osCountryCost[osKey] ?? {};
+          const topCountry =
+            Object.entries(countryCostMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'UNKNOWN';
           const ratio =
             campaignRatioAverages[osKey][key] ??
             networkRatioAverages[osKey][key] ??
+            countryRatioAverages[osKey][topCountry]?.[key] ??
             osRatioAveragesGlobal[osKey][key];
           if (ratio) {
             blended += ratio * weight;
@@ -725,8 +798,8 @@ export default function Page() {
                   contaminados por ventanas incompletas.
                 </li>
                 <li>
-                  Fallback jerárquico de ratios por OS: <b>campaña → network → OS global</b>. Si hay ratio suficiente
-                  a nivel campaña usamos ese; si no, subimos a network; si tampoco hay, usamos OS global.
+                  Fallback jerárquico de ratios por OS: <b>campaña → network → país → OS global</b>. Si hay ratio
+                  suficiente a nivel campaña usamos ese; si no, subimos a network; luego país; y por último OS global.
                 </li>
                 <li>Solo usamos saltos con muestra mínima (>=6 puntos) para evitar ratios inestables.</li>
                 <li>
@@ -762,4 +835,3 @@ export default function Page() {
     </main>
   );
 }
-
