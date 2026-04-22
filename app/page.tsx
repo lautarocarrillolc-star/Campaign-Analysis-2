@@ -330,7 +330,7 @@ export default function Page() {
     );
   }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
 
-  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, maxRoas } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas } = useMemo(() => {
     const periodAggregation = new Map<
       string,
       {
@@ -378,7 +378,7 @@ export default function Page() {
         const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDay.getTime();
         const fromValue = row.revenueByCohort[fromCohort] ?? 0;
         const toValue = row.revenueByCohort[toCohort] ?? 0;
-        if (toIsMatured && fromValue > 0 && toValue > 0) {
+        if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
           const key = ratioKey(fromCohort, toCohort);
           const entry = osRatioAccumulator[row.os][key] ?? { total: 0, count: 0 };
           entry.total += toValue / fromValue;
@@ -492,6 +492,7 @@ export default function Page() {
       periodRoas: roasMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
+      ratioSummary: osRatioAverages,
       maxRoas: currentMax
     };
   }, [scopedRows, granularity, availableCohorts, maturedOnly]);
@@ -650,7 +651,7 @@ export default function Page() {
                             style={heatmapStyle(value, maxRoas, isDarkMode)}
                             title={isPredicted ? 'Predicted value' : 'Actual value'}
                           >
-                            {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
+                            {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
                           </td>
                         );
                       })}
@@ -658,6 +659,48 @@ export default function Page() {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <div className="predictionExplain">
+              <h3>¿Cómo se calcula la predicción?</h3>
+              <ol>
+                <li>
+                  Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>.
+                </li>
+                <li>
+                  Excluimos casos donde el revenue del cohort siguiente es menor al anterior para evitar ratios
+                  contaminados por ventanas incompletas.
+                </li>
+                <li>
+                  El ratio se calcula por <b>OS</b> (Android/iOS). Si el filtro es Unity + Android, usamos solo ratios
+                  Android de Unity; si es Unity + iOS, usamos solo iOS.
+                </li>
+                <li>
+                  Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
+                  <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.
+                </li>
+                <li>
+                  Si faltan pasos intermedios, encadenamos múltiples ratios:
+                  <code>ROAS D120 = D30 × r(D30→D60) × r(D60→D90) × r(D90→D120)</code>.
+                </li>
+              </ol>
+
+              <p className="ratioTitle">Ratios vigentes en esta vista (según filtros actuales):</p>
+              <ul>
+                {(['android', 'ios', 'other'] as const).map((osKey) => {
+                  const pairs = Object.entries(ratioSummary[osKey]);
+                  return (
+                    <li key={`ratio-${osKey}`}>
+                      <b>{osKey.toUpperCase()}:</b>{' '}
+                      {pairs.length === 0
+                        ? 'sin ratios suficientes'
+                        : pairs
+                            .map(([pair, ratio]) => `${pair.replace('all_revenue_total_', '').toUpperCase()}=${ratio.toFixed(3)}`)
+                            .join(' | ')}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           </>
         )}
