@@ -801,7 +801,7 @@ export default function Page() {
                   Fallback jerárquico de ratios por OS: <b>campaña → network → país → OS global</b>. Si hay ratio
                   suficiente a nivel campaña usamos ese; si no, subimos a network; luego país; y por último OS global.
                 </li>
-                <li>Solo usamos saltos con muestra mínima (>=6 puntos) para evitar ratios inestables.</li>
+                <li>Solo usamos saltos con muestra mínima (&gt;=6 puntos) para evitar ratios inestables.</li>
                 <li>
                   Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
                   <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.
