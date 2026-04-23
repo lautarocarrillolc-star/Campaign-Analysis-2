@@ -997,21 +997,22 @@ export default function Page() {
               )}
 
               {activeSeries.map((series) => {
+                type RatioPoint = { x: number; y: number; value: number; period: string };
                 const points = series.values
                   .map((value, index) => {
                     if (value === null) return null;
                     const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
                     const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                    return { x, y, value, period: ratioEvolutionRows[index]?.period };
+                    return { x, y, value, period: ratioEvolutionRows[index].period };
                   })
-                  .filter((point): point is { x: number; y: number; value: number; period?: string } => point !== null);
+                  .filter((point): point is RatioPoint => point !== null);
                 const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
                 return (
                   <g key={`line-${series.key}`}>
                     <path d={d} stroke={series.color} className="ratioLine" />
                     {points.map((point) => (
                       <circle key={`${series.key}-${point.x}`} cx={point.x} cy={point.y} r={4} fill={series.color} className="ratioPoint">
-                        <title>{`${series.label} | ${point.period ?? ''} | ${point.value.toFixed(3)}x`}</title>
+                        <title>{`${series.label} | ${point.period} | ${point.value.toFixed(3)}x`}</title>
                       </circle>
                     ))}
                   </g>
@@ -1050,4 +1051,3 @@ export default function Page() {
     </main>
   );
 }
-
