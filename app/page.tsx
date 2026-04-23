@@ -936,4 +936,3 @@ export default function Page() {
     </main>
   );
 }
-
