@@ -159,9 +159,6 @@ input {
   font-size: 12px;
   cursor: pointer;
   margin-bottom: 4px;
-  position: sticky;
-  top: 36px;
-  z-index: 2;
 }
 
 .toggleRow {
@@ -319,6 +316,15 @@ input {
   position: relative;
 }
 
+.ratioHoverGuide {
+  position: absolute;
+  top: 20px;
+  bottom: 30px;
+  width: 1px;
+  background: color-mix(in srgb, var(--text) 45%, transparent 55%);
+  pointer-events: none;
+}
+
 .gridLine {
   stroke: var(--border);
   stroke-dasharray: 3 4;
@@ -357,17 +363,27 @@ input {
 }
 
 .ratioHoverPanel {
-  margin-top: 8px;
+  position: absolute;
+  top: 26px;
   border: 1px solid var(--border-soft);
   border-radius: 10px;
   padding: 8px 10px;
-  background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
+  background: color-mix(in srgb, var(--panel) 95%, #0b1220 5%);
   font-size: 12px;
+  min-width: 210px;
+  max-width: 290px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  z-index: 3;
 }
 
 .ratioHoverPanel ul {
   margin: 6px 0 0;
   padding-left: 16px;
+}
+
+.hoverLabel {
+  font-weight: 700;
 }
 
 .heatmap tbody th {
