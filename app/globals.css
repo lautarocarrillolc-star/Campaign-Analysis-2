@@ -371,6 +371,12 @@ input {
   opacity: 1;
 }
 
+.ratioPredictedPoint {
+  opacity: 0.95;
+  stroke-width: 2;
+  stroke-dasharray: 2 2;
+}
+
 .ratioHoverPanel {
   position: absolute;
   top: 26px;
