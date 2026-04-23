@@ -151,6 +151,15 @@ function ratioKey(from: string, to: string): string {
 }
 
 type RatioStage = 'early' | 'mid' | 'late';
+type RatioSamplingStrategy = 'all_time' | 'calendar_window' | 'last_mature_cohorts';
+const RATIO_SAMPLING_CONFIG = {
+  midWindowDays: 180,
+  lateMatureCohortLimit: {
+    d120: 12,
+    d180: 12,
+    d360: 8
+  }
+};
 
 function getRatioStage(toCohort: string): RatioStage {
   const toDays = cohortWindowDays(toCohort);
@@ -159,11 +168,63 @@ function getRatioStage(toCohort: string): RatioStage {
   return 'late';
 }
 
-function getRatioRecencyWindowDays(toCohort: string): number | null {
+function getRatioSamplingStrategy(toCohort: string): RatioSamplingStrategy {
   const stage = getRatioStage(toCohort);
-  if (stage === 'early') return null;
-  if (stage === 'mid') return 180;
-  return 90;
+  if (stage === 'early') return 'all_time';
+  if (stage === 'mid') return 'calendar_window';
+  return 'last_mature_cohorts';
+}
+
+function getLateStageMatureCohortLimit(toCohort: string): number {
+  const toDays = cohortWindowDays(toCohort);
+  if (toDays >= 360) return RATIO_SAMPLING_CONFIG.lateMatureCohortLimit.d360;
+  if (toDays >= 180) return RATIO_SAMPLING_CONFIG.lateMatureCohortLimit.d180;
+  if (toDays >= 120) return RATIO_SAMPLING_CONFIG.lateMatureCohortLimit.d120;
+  return 12;
+}
+
+function filterRowsForRatioSampling(args: {
+  rows: DataRow[];
+  toCohort: string;
+  maxDay: Date;
+}): {
+  rows: DataRow[];
+  debug: { strategy: RatioSamplingStrategy; candidates: number; maturedCandidates: number; selected: number; minDate: string | null; maxDate: string | null };
+} {
+  const { rows, toCohort, maxDay } = args;
+  const toDays = cohortWindowDays(toCohort);
+  const maturedRows = rows.filter((row) => row.day.getTime() + toDays * 86400000 <= maxDay.getTime());
+  const strategy = getRatioSamplingStrategy(toCohort);
+  let selected: DataRow[] = maturedRows;
+
+  if (strategy === 'calendar_window') {
+    selected = maturedRows.filter(
+      (row) => row.day.getTime() >= maxDay.getTime() - RATIO_SAMPLING_CONFIG.midWindowDays * 86400000
+    );
+  }
+  if (strategy === 'last_mature_cohorts') {
+    const limit = getLateStageMatureCohortLimit(toCohort);
+    const uniqueDays = Array.from(new Set(maturedRows.map((row) => row.day.toISOString().slice(0, 10))))
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, limit);
+    const daySet = new Set(uniqueDays);
+    selected = maturedRows.filter((row) => daySet.has(row.day.toISOString().slice(0, 10)));
+  }
+
+  const sortedDates = selected
+    .map((row) => row.day.toISOString().slice(0, 10))
+    .sort((a, b) => a.localeCompare(b));
+  return {
+    rows: selected,
+    debug: {
+      strategy,
+      candidates: rows.length,
+      maturedCandidates: maturedRows.length,
+      selected: selected.length,
+      minDate: sortedDates[0] ?? null,
+      maxDate: sortedDates[sortedDates.length - 1] ?? null
+    }
+  };
 }
 
 function getMinSamplesForRatio(toCohort: string): number {
@@ -612,20 +673,17 @@ export default function Page() {
     const accumulateRatios = (
       sourceRows: DataRow[],
       accumulator: Record<string, Record<string, Array<{ ratio: number; weight: number }>>>,
-      maxDay: Date
+      maxDay: Date,
+      debugCollector: Record<string, { strategy: RatioSamplingStrategy; candidates: number; maturedCandidates: number; selected: number; minDate: string | null; maxDate: string | null }>
     ) => {
-      for (const row of sourceRows) {
-        cohortPairs.forEach(([fromCohort, toCohort]) => {
-          const recencyWindowDays = getRatioRecencyWindowDays(toCohort);
-          const recencyPass =
-            recencyWindowDays === null || row.day.getTime() >= maxDay.getTime() - recencyWindowDays * 86400000;
-          if (!recencyPass) return;
-          const toDays = cohortWindowDays(toCohort);
-          const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxDay.getTime();
+      cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const key = ratioKey(fromCohort, toCohort);
+        const sampled = filterRowsForRatioSampling({ rows: sourceRows, toCohort, maxDay });
+        debugCollector[key] = sampled.debug;
+        for (const row of sampled.rows) {
           const fromValue = row.revenueByCohort[fromCohort] ?? 0;
           const toValue = row.revenueByCohort[toCohort] ?? 0;
-          if (toIsMatured && fromValue > 0 && toValue > 0) {
-            const key = ratioKey(fromCohort, toCohort);
+          if (fromValue > 0 && toValue > 0) {
             const entry = accumulator[row.os][key] ?? [];
             const rawRatio = toValue / fromValue;
             entry.push({
@@ -634,8 +692,8 @@ export default function Page() {
             });
             accumulator[row.os][key] = entry;
           }
-        });
-      }
+        }
+      });
     };
 
     for (const row of heatmapRows) {
@@ -688,33 +746,41 @@ export default function Page() {
         ? baseRowsForRatios.filter((row) => selectedCountries.includes(row.country))
         : baseRowsForRatios;
 
-    accumulateRatios(campaignRows, campaignRatioAccumulator, maxAvailableDayGlobal);
-    accumulateRatios(networkRows, networkRatioAccumulator, maxAvailableDayGlobal);
-    accumulateRatios(countryRows, osRatioAccumulator, maxAvailableDayGlobal);
+    type SamplingDebug = {
+      strategy: RatioSamplingStrategy;
+      candidates: number;
+      maturedCandidates: number;
+      selected: number;
+      minDate: string | null;
+      maxDate: string | null;
+    };
+    const campaignSamplingDebug: Record<string, SamplingDebug> = {};
+    const networkSamplingDebug: Record<string, SamplingDebug> = {};
+    const globalSamplingDebug: Record<string, SamplingDebug> = {};
+    const countrySamplingDebug: Record<string, Record<string, Record<string, SamplingDebug>>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+
+    accumulateRatios(campaignRows, campaignRatioAccumulator, maxAvailableDayGlobal, campaignSamplingDebug);
+    accumulateRatios(networkRows, networkRatioAccumulator, maxAvailableDayGlobal, networkSamplingDebug);
+    accumulateRatios(countryRows, osRatioAccumulator, maxAvailableDayGlobal, globalSamplingDebug);
     for (const row of countryRows) {
       const bucket = countryRatioAccumulator[row.os][row.country] ?? {};
       countryRatioAccumulator[row.os][row.country] = bucket;
-      cohortPairs.forEach(([fromCohort, toCohort]) => {
-        const recencyWindowDays = getRatioRecencyWindowDays(toCohort);
-        const recencyPass =
-          recencyWindowDays === null || row.day.getTime() >= maxAvailableDayGlobal.getTime() - recencyWindowDays * 86400000;
-        if (!recencyPass) return;
-        const toDays = cohortWindowDays(toCohort);
-        const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDayGlobal.getTime();
-        const fromValue = row.revenueByCohort[fromCohort] ?? 0;
-        const toValue = row.revenueByCohort[toCohort] ?? 0;
-        if (toIsMatured && fromValue > 0 && toValue > 0) {
-          const key = ratioKey(fromCohort, toCohort);
-          const entry = bucket[key] ?? [];
-          const rawRatio = toValue / fromValue;
-          entry.push({
-            ratio: clampHistoricalRatio(rawRatio, RATIO_PREDICTION_CONFIG.clampMin, RATIO_PREDICTION_CONFIG.clampMax),
-            weight: Math.max(row.cost, 1)
-          });
-          bucket[key] = entry;
-        }
-      });
     }
+    (['android', 'ios', 'other'] as const).forEach((osKey) => {
+      const countryList = Array.from(new Set(countryRows.filter((row) => row.os === osKey).map((row) => row.country)));
+      countryList.forEach((country) => {
+        const debugTarget: Record<string, SamplingDebug> = {};
+        countrySamplingDebug[osKey][country] = debugTarget;
+        const filtered = countryRows.filter((row) => row.os === osKey && row.country === country);
+        const tempAcc: Record<string, Record<string, Array<{ ratio: number; weight: number }>>> = { android: {}, ios: {}, other: {} };
+        accumulateRatios(filtered, tempAcc, maxAvailableDayGlobal, debugTarget);
+        countryRatioAccumulator[osKey][country] = tempAcc[osKey];
+      });
+    });
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
     const installsMap = new Map<string, number>();
@@ -831,7 +897,6 @@ export default function Page() {
         let blended = 0;
         let usedWeight = 0;
         const minSamples = getMinSamplesForRatio(toCohort);
-        const recencyWindowDays = getRatioRecencyWindowDays(toCohort);
         (['android', 'ios', 'other'] as const).forEach((osKey) => {
           const weight = (values.osCost[osKey] ?? 0) / osTotal;
           const countryCostMap = values.osCountryCost[osKey] ?? {};
@@ -875,7 +940,12 @@ export default function Page() {
             os: osKey,
             ratioKey: key,
             stage: getRatioStage(toCohort),
-            recencyWindowDays: recencyWindowDays ?? 'all-time',
+            sampling: {
+              campaign: campaignSamplingDebug[key] ?? null,
+              network: networkSamplingDebug[key] ?? null,
+              country: countrySamplingDebug[osKey][topCountry]?.[key] ?? null,
+              global: globalSamplingDebug[key] ?? null
+            },
             method: 'trimmed_weighted_mean',
             minSamples,
             counts: {
@@ -1372,7 +1442,8 @@ export default function Page() {
               <ol>
                 <li>
                   Para cada salto entre cohorts usamos histórico por ventana:
-                  <b>early (hasta D30)=all-time</b>, <b>mid (D30→D90)=~6 meses</b>, <b>late (D90+)=~90 días</b>.
+                  <b>early (hasta D30)=all-time</b>, <b>mid (D30→D90)=~6 meses</b>, <b>late (D90+)=últimas cohorts maduras</b>
+                  (D90→D120=12, D120→D180=12, D180→D360=8).
                 </li>
                 <li>
                   En cada nivel usamos <b>trimmed weighted mean</b> (recorte 10% abajo/arriba) ponderado por spend.
@@ -1404,7 +1475,7 @@ export default function Page() {
                 </li>
               </ol>
 
-              <p className="ratioTitle">Ratios vigentes en esta vista (calculados con histórico all-time + fallback):</p>
+              <p className="ratioTitle">Ratios vigentes en esta vista (por etapa + fallback blended):</p>
               <ul>
                 {(['android', 'ios', 'other'] as const).map((osKey) => {
                   const pairs = Object.entries(ratioSummary[osKey]);
