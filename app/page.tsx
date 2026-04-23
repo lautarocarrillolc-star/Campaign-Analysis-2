@@ -43,6 +43,19 @@ function periodKey(day: Date, granularity: Granularity): string {
   return date.toISOString().slice(0, 10);
 }
 
+function periodEndDate(period: string, granularity: Granularity): Date {
+  if (granularity === 'daily') {
+    return new Date(`${period}T00:00:00.000Z`);
+  }
+  if (granularity === 'weekly') {
+    const start = new Date(`${period}T00:00:00.000Z`);
+    start.setUTCDate(start.getUTCDate() + 6);
+    return start;
+  }
+  const [year, month] = period.split('-').map(Number);
+  return new Date(Date.UTC(year, month, 0));
+}
+
 function heatmapStyle(
   value: number | null,
   maxRoas: number,
@@ -371,13 +384,14 @@ export default function Page() {
     );
   }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks, selectedCampaigns]);
 
-  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas, maturityDiagnostics } = useMemo(() => {
     const periodAggregation = new Map<
       string,
       {
         totalCost: number;
         revenueByCohort: Record<string, number>;
         cohortCost: Record<string, number>;
+        maturedCohortCost: Record<string, number>;
         osCost: Record<string, number>;
         osCountryCost: Record<string, Record<string, number>>;
       }
@@ -428,6 +442,7 @@ export default function Page() {
         totalCost: 0,
         revenueByCohort: {},
         cohortCost: {},
+        maturedCohortCost: {},
         osCost: {},
         osCountryCost: {}
       };
@@ -441,10 +456,11 @@ export default function Page() {
         const daysNeeded = cohortWindowDays(cohort);
         const msNeeded = daysNeeded * 86400000;
         const isMatured = row.day.getTime() + msNeeded <= maxAvailableDay.getTime();
-        if (!maturedOnly || isMatured) {
-          current.revenueByCohort[cohort] =
-            (current.revenueByCohort[cohort] ?? 0) + (row.revenueByCohort[cohort] ?? 0);
-          current.cohortCost[cohort] = (current.cohortCost[cohort] ?? 0) + row.cost;
+        current.revenueByCohort[cohort] =
+          (current.revenueByCohort[cohort] ?? 0) + (row.revenueByCohort[cohort] ?? 0);
+        current.cohortCost[cohort] = (current.cohortCost[cohort] ?? 0) + row.cost;
+        if (isMatured) {
+          current.maturedCohortCost[cohort] = (current.maturedCohortCost[cohort] ?? 0) + row.cost;
         }
       }
 
@@ -485,6 +501,7 @@ export default function Page() {
     const roasMap = new Map<string, number | null>();
     const predictedRoasMap = new Map<string, number | null>();
     const predictedMaskMap = new Map<string, boolean>();
+    const maturityDiagnosticsRows: Array<{ period: string; cohort: string; matureCoverage: number }> = [];
     let currentMax = 0;
 
     const buildWeightedMedianAverages = (
@@ -566,9 +583,16 @@ export default function Page() {
       costMap.set(period, values.totalCost);
 
       availableCohorts.forEach((cohort) => {
+        const periodEnd = periodEndDate(period, granularity);
+        const isFullPeriodMatured =
+          periodEnd.getTime() + cohortWindowDays(cohort) * 86400000 <= maxAvailableDay.getTime();
         const revenue = values.revenueByCohort[cohort] ?? 0;
         const eligibleCost = values.cohortCost[cohort] ?? 0;
-        const roas = eligibleCost === 0 ? null : revenue / eligibleCost;
+        const matureCoverage = eligibleCost > 0 ? (values.maturedCohortCost[cohort] ?? 0) / eligibleCost : 0;
+        if (!isFullPeriodMatured && matureCoverage > 0 && matureCoverage < 1) {
+          maturityDiagnosticsRows.push({ period, cohort, matureCoverage });
+        }
+        const roas = maturedOnly && !isFullPeriodMatured ? null : eligibleCost === 0 ? null : revenue / eligibleCost;
         roasMap.set(`${period}|||${cohort}`, roas);
         if (roas !== null) {
           currentMax = Math.max(currentMax, roas);
@@ -651,7 +675,8 @@ export default function Page() {
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
       ratioSummary: activeRatioSummary,
-      maxRoas: currentMax
+      maxRoas: currentMax,
+      maturityDiagnostics: maturityDiagnosticsRows.slice(0, 8)
     };
   }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
 
@@ -974,6 +999,18 @@ export default function Page() {
                   );
                 })}
               </ul>
+              {maturedOnly && maturityDiagnostics.length > 0 && (
+                <>
+                  <p className="ratioTitle">Validación de madurez (evita “saltos” engañosos por ventana parcial):</p>
+                  <ul>
+                    {maturityDiagnostics.map((item) => (
+                      <li key={`diag-${item.period}-${item.cohort}`}>
+                        {item.period} / {normalizeCohortLabel(item.cohort)} tenía cobertura madura parcial ({(item.matureCoverage * 100).toFixed(1)}%), por eso ahora se muestra como N/A hasta completar ventana.
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
           </>
         )}
