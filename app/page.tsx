@@ -150,6 +150,111 @@ function ratioKey(from: string, to: string): string {
   return `${from}=>${to}`;
 }
 
+type RatioStage = 'early' | 'mid' | 'late';
+
+function getRatioStage(toCohort: string): RatioStage {
+  const toDays = cohortWindowDays(toCohort);
+  if (toDays <= 30) return 'early';
+  if (toDays <= 90) return 'mid';
+  return 'late';
+}
+
+function getRatioRecencyWindowDays(toCohort: string): number | null {
+  const stage = getRatioStage(toCohort);
+  if (stage === 'early') return null;
+  if (stage === 'mid') return 180;
+  return 90;
+}
+
+function getMinSamplesForRatio(toCohort: string): number {
+  return getRatioStage(toCohort) === 'late' ? 3 : 6;
+}
+
+function clampHistoricalRatio(value: number, minRatio: number, maxRatio: number): number {
+  return Math.min(Math.max(value, minRatio), maxRatio);
+}
+
+function buildTrimmedWeightedMean(
+  samples: Array<{ ratio: number; weight: number }>,
+  trimPercent: number,
+  minKeepCount: number
+): number | null {
+  if (samples.length === 0) return null;
+  const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
+  const trimCount = Math.floor(sorted.length * trimPercent);
+  const safeTrim = Math.max(0, Math.min(trimCount, Math.floor((sorted.length - minKeepCount) / 2)));
+  const trimmed = sorted.slice(safeTrim, sorted.length - safeTrim);
+  if (trimmed.length === 0) return null;
+  const totalWeight = trimmed.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) return null;
+  return trimmed.reduce((sum, item) => sum + item.ratio * item.weight, 0) / totalWeight;
+}
+
+function resolveBlendedFallbackRatio(levels: {
+  campaign: { value: number | null; count: number };
+  network: { value: number | null; count: number };
+  country: { value: number | null; count: number };
+  global: { value: number | null; count: number };
+  minSamples: number;
+}): { ratio: number | null; blendApplied: boolean } {
+  const { campaign, network, country, global, minSamples } = levels;
+  const hasCampaign = campaign.value !== null && campaign.count > 0;
+  const hasNetwork = network.value !== null && network.count > 0;
+  const hasCountry = country.value !== null && country.count > 0;
+  const hasGlobal = global.value !== null && global.count > 0;
+
+  const parts: Array<{ value: number; weight: number }> = [];
+  const push = (value: number | null, weight: number) => {
+    if (value !== null && weight > 0) parts.push({ value, weight });
+  };
+
+  if (hasCampaign && campaign.count >= minSamples) {
+    push(campaign.value, 0.7);
+    push(network.value, 0.2);
+    push(global.value, 0.1);
+  } else if (hasCampaign) {
+    push(campaign.value, 0.4);
+    push(network.value, 0.4);
+    push(global.value, 0.2);
+  } else if (hasNetwork && network.count >= minSamples) {
+    push(network.value, 0.7);
+    push(country.value, 0.2);
+    push(global.value, 0.1);
+  } else if (hasNetwork) {
+    push(network.value, 0.5);
+    push(country.value, 0.3);
+    push(global.value, 0.2);
+  } else if (hasCountry) {
+    push(country.value, 0.75);
+    push(global.value, 0.25);
+  } else if (hasGlobal) {
+    push(global.value, 1);
+  }
+
+  if (parts.length === 0) return { ratio: null, blendApplied: false };
+  const total = parts.reduce((sum, part) => sum + part.weight, 0);
+  const ratio = parts.reduce((sum, part) => sum + part.value * part.weight, 0) / total;
+  return { ratio, blendApplied: parts.length > 1 };
+}
+
+function applyLateStageFlatlineGuard(args: {
+  ratio: number | null;
+  toCohort: string;
+  flatlineThreshold: number;
+  recentEvidenceAvg: number | null;
+  recentEvidenceCount: number;
+  minSamples: number;
+  evidenceMinAvg: number;
+}): { ratio: number | null; applied: boolean } {
+  const { ratio, toCohort, flatlineThreshold, recentEvidenceAvg, recentEvidenceCount, minSamples, evidenceMinAvg } = args;
+  if (ratio === null || getRatioStage(toCohort) !== 'late') return { ratio, applied: false };
+  if (ratio >= flatlineThreshold) return { ratio, applied: false };
+  if (recentEvidenceAvg === null || recentEvidenceCount < minSamples || recentEvidenceAvg <= evidenceMinAvg) {
+    return { ratio, applied: false };
+  }
+  return { ratio: recentEvidenceAvg, applied: true };
+}
+
 function deriveCountry(row: CsvRow): string {
   const explicit =
     row.country || row.country_code || row.countryCode || row.geo || row.region || row.market;
@@ -455,7 +560,15 @@ export default function Page() {
     return scopedRows.filter((row) => row.day.getTime() >= startMs && row.day.getTime() <= endMs);
   }, [scopedRows, quickDatePreset, fromDate, toDate]);
 
-  const { orderedPeriods, periodCost, periodInstalls, periodCpi, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, periodJumpRatios, maxRoas, maturityDiagnostics } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodInstalls, periodCpi, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, periodJumpRatios, ratioDebugInfo, maxRoas, maturityDiagnostics } = useMemo(() => {
+    const RATIO_PREDICTION_CONFIG = {
+      trimPercent: 0.1,
+      trimMinKeepCount: 4,
+      clampMin: 0.85,
+      clampMax: 1.8,
+      lateFlatlineThreshold: 1.02,
+      lateEvidenceMinAvg: 1.05
+    };
     const groupKeyFromRow = (row: DataRow): string => {
       if (heatmapOrderBy === 'os') return row.os.toUpperCase();
       if (heatmapOrderBy === 'country') return row.country;
@@ -503,14 +616,22 @@ export default function Page() {
     ) => {
       for (const row of sourceRows) {
         cohortPairs.forEach(([fromCohort, toCohort]) => {
+          const recencyWindowDays = getRatioRecencyWindowDays(toCohort);
+          const recencyPass =
+            recencyWindowDays === null || row.day.getTime() >= maxDay.getTime() - recencyWindowDays * 86400000;
+          if (!recencyPass) return;
           const toDays = cohortWindowDays(toCohort);
           const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxDay.getTime();
           const fromValue = row.revenueByCohort[fromCohort] ?? 0;
           const toValue = row.revenueByCohort[toCohort] ?? 0;
-          if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
+          if (toIsMatured && fromValue > 0 && toValue > 0) {
             const key = ratioKey(fromCohort, toCohort);
             const entry = accumulator[row.os][key] ?? [];
-            entry.push({ ratio: toValue / fromValue, weight: Math.max(row.cost, 1) });
+            const rawRatio = toValue / fromValue;
+            entry.push({
+              ratio: clampHistoricalRatio(rawRatio, RATIO_PREDICTION_CONFIG.clampMin, RATIO_PREDICTION_CONFIG.clampMax),
+              weight: Math.max(row.cost, 1)
+            });
             accumulator[row.os][key] = entry;
           }
         });
@@ -574,14 +695,22 @@ export default function Page() {
       const bucket = countryRatioAccumulator[row.os][row.country] ?? {};
       countryRatioAccumulator[row.os][row.country] = bucket;
       cohortPairs.forEach(([fromCohort, toCohort]) => {
+        const recencyWindowDays = getRatioRecencyWindowDays(toCohort);
+        const recencyPass =
+          recencyWindowDays === null || row.day.getTime() >= maxAvailableDayGlobal.getTime() - recencyWindowDays * 86400000;
+        if (!recencyPass) return;
         const toDays = cohortWindowDays(toCohort);
         const toIsMatured = row.day.getTime() + toDays * 86400000 <= maxAvailableDayGlobal.getTime();
         const fromValue = row.revenueByCohort[fromCohort] ?? 0;
         const toValue = row.revenueByCohort[toCohort] ?? 0;
-        if (toIsMatured && fromValue > 0 && toValue > 0 && toValue >= fromValue) {
+        if (toIsMatured && fromValue > 0 && toValue > 0) {
           const key = ratioKey(fromCohort, toCohort);
           const entry = bucket[key] ?? [];
-          entry.push({ ratio: toValue / fromValue, weight: Math.max(row.cost, 1) });
+          const rawRatio = toValue / fromValue;
+          entry.push({
+            ratio: clampHistoricalRatio(rawRatio, RATIO_PREDICTION_CONFIG.clampMin, RATIO_PREDICTION_CONFIG.clampMax),
+            weight: Math.max(row.cost, 1)
+          });
           bucket[key] = entry;
         }
       });
@@ -597,70 +726,65 @@ export default function Page() {
     const maturityDiagnosticsRows: Array<{ period: string; cohort: string; matureCoverage: number }> = [];
     let currentMax = 0;
 
-    const buildWeightedMedianAverages = (
+    const buildTrimmedAverages = (
       accumulator: Record<string, Record<string, Array<{ ratio: number; weight: number }>>>
-    ): Record<string, Record<string, number>> => {
-      const output: Record<string, Record<string, number>> = {
-        android: {},
-        ios: {},
-        other: {}
-      };
+    ): { values: Record<string, Record<string, number>>; counts: Record<string, Record<string, number>> } => {
+      const values: Record<string, Record<string, number>> = { android: {}, ios: {}, other: {} };
+      const counts: Record<string, Record<string, number>> = { android: {}, ios: {}, other: {} };
       (['android', 'ios', 'other'] as const).forEach((osKey) => {
         Object.entries(accumulator[osKey]).forEach(([key, samples]) => {
-          if (samples.length >= 6) {
-            const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
-            const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
-            const halfWeight = totalWeight / 2;
-            let running = 0;
-            let weightedMedian = sorted[sorted.length - 1].ratio;
-            for (const sample of sorted) {
-              running += sample.weight;
-              if (running >= halfWeight) {
-                weightedMedian = sample.ratio;
-                break;
-              }
-            }
-            output[osKey][key] = weightedMedian;
-          }
+          const toCohort = key.split('=>')[1];
+          const minSamples = getMinSamplesForRatio(toCohort);
+          counts[osKey][key] = samples.length;
+          if (samples.length < minSamples) return;
+          const ratio = buildTrimmedWeightedMean(
+            samples,
+            RATIO_PREDICTION_CONFIG.trimPercent,
+            RATIO_PREDICTION_CONFIG.trimMinKeepCount
+          );
+          if (ratio !== null) values[osKey][key] = ratio;
         });
       });
-      return output;
+      return { values, counts };
     };
 
-    const campaignRatioAverages = buildWeightedMedianAverages(campaignRatioAccumulator);
-    const networkRatioAverages = buildWeightedMedianAverages(networkRatioAccumulator);
-    const osRatioAveragesGlobal = buildWeightedMedianAverages(osRatioAccumulator);
+    const campaignStats = buildTrimmedAverages(campaignRatioAccumulator);
+    const networkStats = buildTrimmedAverages(networkRatioAccumulator);
+    const osGlobalStats = buildTrimmedAverages(osRatioAccumulator);
     const countryRatioAverages: Record<string, Record<string, Record<string, number>>> = {
       android: {},
       ios: {},
       other: {}
     };
-    const buildCountryMedian = (
-      data: Record<string, Array<{ ratio: number; weight: number }>>
+    const countryRatioCounts: Record<string, Record<string, Record<string, number>>> = {
+      android: {},
+      ios: {},
+      other: {}
+    };
+    const buildCountryTrimmed = (
+      data: Record<string, Array<{ ratio: number; weight: number }>>,
+      countTarget: Record<string, number>
     ): Record<string, number> => {
       const output: Record<string, number> = {};
       Object.entries(data).forEach(([key, samples]) => {
-        if (samples.length >= 6) {
-          const sorted = [...samples].sort((a, b) => a.ratio - b.ratio);
-          const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
-          const halfWeight = totalWeight / 2;
-          let running = 0;
-          let weightedMedian = sorted[sorted.length - 1].ratio;
-          for (const sample of sorted) {
-            running += sample.weight;
-            if (running >= halfWeight) {
-              weightedMedian = sample.ratio;
-              break;
-            }
-          }
-          output[key] = weightedMedian;
-        }
+        const toCohort = key.split('=>')[1];
+        const minSamples = getMinSamplesForRatio(toCohort);
+        countTarget[key] = samples.length;
+        if (samples.length < minSamples) return;
+        const ratio = buildTrimmedWeightedMean(
+          samples,
+          RATIO_PREDICTION_CONFIG.trimPercent,
+          RATIO_PREDICTION_CONFIG.trimMinKeepCount
+        );
+        if (ratio !== null) output[key] = ratio;
       });
       return output;
     };
     (['android', 'ios', 'other'] as const).forEach((osKey) => {
       Object.entries(countryRatioAccumulator[osKey]).forEach(([country, data]) => {
-        countryRatioAverages[osKey][country] = buildCountryMedian(data);
+        const target = countryRatioCounts[osKey][country] ?? {};
+        countryRatioCounts[osKey][country] = target;
+        countryRatioAverages[osKey][country] = buildCountryTrimmed(data, target);
       });
     });
 
@@ -670,6 +794,7 @@ export default function Page() {
       other: {}
     };
     const periodJumpRatiosMap = new Map<string, Record<string, number>>();
+    const ratioDebugEntries: Array<Record<string, unknown>> = [];
 
     periods.forEach((period) => {
       const values = periodAggregation.get(period);
@@ -705,16 +830,71 @@ export default function Page() {
         const key = ratioKey(fromCohort, toCohort);
         let blended = 0;
         let usedWeight = 0;
+        const minSamples = getMinSamplesForRatio(toCohort);
+        const recencyWindowDays = getRatioRecencyWindowDays(toCohort);
         (['android', 'ios', 'other'] as const).forEach((osKey) => {
           const weight = (values.osCost[osKey] ?? 0) / osTotal;
           const countryCostMap = values.osCountryCost[osKey] ?? {};
           const topCountry =
             Object.entries(countryCostMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'UNKNOWN';
-          const ratio =
-            campaignRatioAverages[osKey][key] ??
-            networkRatioAverages[osKey][key] ??
-            (enableCountryFallback ? countryRatioAverages[osKey][topCountry]?.[key] : undefined) ??
-            osRatioAveragesGlobal[osKey][key];
+          const campaignLevel = {
+            value: campaignStats.values[osKey][key] ?? null,
+            count: campaignStats.counts[osKey][key] ?? 0
+          };
+          const networkLevel = {
+            value: networkStats.values[osKey][key] ?? null,
+            count: networkStats.counts[osKey][key] ?? 0
+          };
+          const countryLevel = {
+            value: enableCountryFallback ? countryRatioAverages[osKey][topCountry]?.[key] ?? null : null,
+            count: enableCountryFallback ? countryRatioCounts[osKey][topCountry]?.[key] ?? 0 : 0
+          };
+          const globalLevel = {
+            value: osGlobalStats.values[osKey][key] ?? null,
+            count: osGlobalStats.counts[osKey][key] ?? 0
+          };
+          const blendedResolved = resolveBlendedFallbackRatio({
+            campaign: campaignLevel,
+            network: networkLevel,
+            country: countryLevel,
+            global: globalLevel,
+            minSamples
+          });
+          const guarded = applyLateStageFlatlineGuard({
+            ratio: blendedResolved.ratio,
+            toCohort,
+            flatlineThreshold: RATIO_PREDICTION_CONFIG.lateFlatlineThreshold,
+            recentEvidenceAvg: globalLevel.value,
+            recentEvidenceCount: globalLevel.count,
+            minSamples,
+            evidenceMinAvg: RATIO_PREDICTION_CONFIG.lateEvidenceMinAvg
+          });
+          const ratio = guarded.ratio;
+          ratioDebugEntries.push({
+            period,
+            os: osKey,
+            ratioKey: key,
+            stage: getRatioStage(toCohort),
+            recencyWindowDays: recencyWindowDays ?? 'all-time',
+            method: 'trimmed_weighted_mean',
+            minSamples,
+            counts: {
+              campaign: campaignLevel.count,
+              network: networkLevel.count,
+              country: countryLevel.count,
+              global: globalLevel.count
+            },
+            levelRatios: {
+              campaign: campaignLevel.value,
+              network: networkLevel.value,
+              country: countryLevel.value,
+              global: globalLevel.value
+            },
+            ratioFinal: ratio,
+            blendApplied: blendedResolved.blendApplied,
+            flatlineGuardApplied: guarded.applied,
+            clampApplied: true
+          });
           if (ratio) {
             blended += ratio * weight;
             usedWeight += weight;
@@ -780,6 +960,7 @@ export default function Page() {
       predictedMask: predictedMaskMap,
       ratioSummary: activeRatioSummary,
       periodJumpRatios: periodJumpRatiosMap,
+      ratioDebugInfo: ratioDebugEntries,
       maxRoas: currentMax,
       maturityDiagnostics: maturityDiagnosticsRows.slice(0, 8)
     };
@@ -853,6 +1034,10 @@ export default function Page() {
       };
     });
   }, [ratioPairs, ratioEvolutionRows]);
+
+  useEffect(() => {
+    (globalThis as Record<string, unknown>).__ratioDebug = ratioDebugInfo;
+  }, [ratioDebugInfo]);
 
   const chartWidth = 980;
   const chartHeight = 300;
@@ -1186,21 +1371,28 @@ export default function Page() {
               <h3>¿Cómo se calcula la predicción?</h3>
               <ol>
                 <li>
-                  Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>
-                  usando <b>todo el histórico disponible (all-time)</b>, no solo la ventana visible.
+                  Para cada salto entre cohorts usamos histórico por ventana:
+                  <b>early (hasta D30)=all-time</b>, <b>mid (D30→D90)=~6 meses</b>, <b>late (D90+)=~90 días</b>.
                 </li>
                 <li>
-                  Usamos <b>mediana ponderada por spend</b> y muestra mínima (&gt;=6) para evitar outliers y saltos
-                  inestables.
+                  En cada nivel usamos <b>trimmed weighted mean</b> (recorte 10% abajo/arriba) ponderado por spend.
+                  Ejemplo simple: si hay [1.00, 1.02, 1.05, 1.80], el 1.80 extremo pesa menos por recorte.
                 </li>
                 <li>
-                  Fallback jerárquico por OS con histórico all-time:
-                  <b>campaña → network → (país si está activado) → OS global</b>. Si un salto tardío no tiene data
-                  suficiente en campaña (ej: Unity), sube al siguiente nivel automáticamente.
+                  Mínimo de muestras: <b>early/mid=6</b>, <b>late=3</b>. Así los saltos tardíos no caen tan rápido a
+                  global por falta de datos.
                 </li>
                 <li>
-                  Si un ratio real es &lt; 1.00 o no existe, se considera no confiable para la tabla de ratios y se deja
-                  como N/A; con predicción activa se completa con el ratio estimado del fallback.
+                  No descartamos ratios &lt;1 internamente: se incluyen con <b>clamp [0.85, 1.80]</b> para robustez.
+                  En la tabla visual seguimos mostrando N/A cuando aplica para mantener lectura clara.
+                </li>
+                <li>
+                  Fallback blended (no hard switch): combina campaña/network/país/global según señal disponible.
+                  Ejemplo: campaña débil ⇒ 40% campaña + 40% network + 20% global.
+                </li>
+                <li>
+                  Protección anti-flatline tardío: si un salto late queda ~1.00x pero la evidencia reciente real es mayor,
+                  ajustamos hacia ese valor reciente para evitar planchado artificial.
                 </li>
                 <li>
                   Cuando falta un ROAS, proyectamos secuencialmente desde el último punto disponible:
@@ -1404,3 +1596,4 @@ export default function Page() {
     </main>
   );
 }
+
