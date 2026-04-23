@@ -455,7 +455,7 @@ export default function Page() {
     return scopedRows.filter((row) => row.day.getTime() >= startMs && row.day.getTime() <= endMs);
   }, [scopedRows, quickDatePreset, fromDate, toDate]);
 
-  const { orderedPeriods, periodCost, periodInstalls, periodPayingUsers, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas, maturityDiagnostics } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodInstalls, periodPayingUsers, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, maxRoas, maturityDiagnostics } = useMemo(() => {
     const groupKeyFromRow = (row: DataRow): string => {
       if (heatmapOrderBy === 'os') return row.os.toUpperCase();
       if (heatmapOrderBy === 'country') return row.country;
@@ -588,6 +588,7 @@ export default function Page() {
     const installsMap = new Map<string, number>();
     const payingUsersMap = new Map<string, number>();
     const roasMap = new Map<string, number | null>();
+    const ltvMap = new Map<string, number | null>();
     const predictedRoasMap = new Map<string, number | null>();
     const predictedMaskMap = new Map<string, boolean>();
     const maturityDiagnosticsRows: Array<{ period: string; cohort: string; matureCoverage: number }> = [];
@@ -686,6 +687,9 @@ export default function Page() {
         }
         const roas = maturedOnly && !isFullPeriodMatured ? null : eligibleCost === 0 ? null : revenue / eligibleCost;
         roasMap.set(`${period}|||${cohort}`, roas);
+        const installs = values.totalInstalls;
+        const ltv = maturedOnly && !isFullPeriodMatured ? null : installs === 0 ? null : revenue / installs;
+        ltvMap.set(`${period}|||${cohort}`, ltv);
         if (roas !== null) {
           currentMax = Math.max(currentMax, roas);
         }
@@ -766,6 +770,7 @@ export default function Page() {
       periodInstalls: installsMap,
       periodPayingUsers: payingUsersMap,
       periodRoas: roasMap,
+      periodLtv: ltvMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
       ratioSummary: activeRatioSummary,
@@ -1012,46 +1017,96 @@ export default function Page() {
           cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
           completas.
         </p>
-        <div className="heatmapScroll">
-          <table className="heatmap">
-            <thead>
-              <tr>
-                <th>{heatmapRowLabel}</th>
-                <th>Ad spend</th>
-                <th>Installs</th>
-                <th>Paying users</th>
-                {availableCohorts.map((cohort) => (
-                  <th key={cohort}>{formatCohort(cohort)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {orderedPeriods.map((period) => (
-                (() => {
-                  const rowValues = availableCohorts
-                    .map((cohort) => periodRoas.get(`${period}|||${cohort}`) ?? null)
-                    .filter((value): value is number => value !== null);
-                  const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : maxRoas;
-                  return (
-                    <tr key={period}>
-                      <th>{period}</th>
-                      <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
-                      <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                      <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                      {availableCohorts.map((cohort) => {
-                        const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
-                        return (
-                          <td key={`${period}-${cohort}`} style={heatmapStyle(value, rowMax, isDarkMode)}>
-                            {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })()
-              ))}
-            </tbody>
-          </table>
+        <div className="dualHeatmapGrid">
+          <div>
+            <p className="legend">ROAS Heatmap</p>
+            <div className="heatmapScroll">
+              <table className="heatmap">
+                <thead>
+                  <tr>
+                    <th>{heatmapRowLabel}</th>
+                    <th>Ad spend</th>
+                    <th>Installs</th>
+                    <th>Paying users</th>
+                    {availableCohorts.map((cohort) => (
+                      <th key={cohort}>{formatCohort(cohort)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderedPeriods.map((period) => (
+                    (() => {
+                      const rowValues = availableCohorts
+                        .map((cohort) => periodRoas.get(`${period}|||${cohort}`) ?? null)
+                        .filter((value): value is number => value !== null);
+                      const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : maxRoas;
+                      return (
+                        <tr key={period}>
+                          <th>{period}</th>
+                          <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                          <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          {availableCohorts.map((cohort) => {
+                            const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
+                            return (
+                              <td key={`${period}-${cohort}`} style={heatmapStyle(value, rowMax, isDarkMode)}>
+                                {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })()
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <p className="legend">LTV Evolution (Revenue / Installs)</p>
+            <div className="heatmapScroll">
+              <table className="heatmap">
+                <thead>
+                  <tr>
+                    <th>{heatmapRowLabel}</th>
+                    <th>Ad spend</th>
+                    <th>Installs</th>
+                    <th>Paying users</th>
+                    {availableCohorts.map((cohort) => (
+                      <th key={`ltv-${cohort}`}>{`LTV ${normalizeCohortLabel(cohort)}`}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderedPeriods.map((period) => (
+                    (() => {
+                      const rowValues = availableCohorts
+                        .map((cohort) => periodLtv.get(`${period}|||${cohort}`) ?? null)
+                        .filter((value): value is number => value !== null);
+                      const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : 1;
+                      return (
+                        <tr key={`ltv-${period}`}>
+                          <th>{period}</th>
+                          <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                          <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          {availableCohorts.map((cohort) => {
+                            const value = periodLtv.get(`${period}|||${cohort}`) ?? null;
+                            return (
+                              <td key={`ltv-${period}-${cohort}`} style={heatmapStyle(value, rowMax, isDarkMode)}>
+                                {value === null ? '∞ / N/A' : value.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })()
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
         {enablePrediction && (
