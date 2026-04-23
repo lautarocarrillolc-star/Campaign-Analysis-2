@@ -26,9 +26,10 @@ type QuickDatePreset =
   | 'last_5_months'
   | 'last_3_months'
   | 'last_2_months'
-  | 'past_month'
+  | 'last_month'
   | 'this_month'
-  | 'last_week'
+  | 'last_30_days'
+  | 'last_14_days'
   | 'last_7_days'
   | 'yesterday'
   | 'custom';
@@ -437,16 +438,12 @@ export default function Page() {
     if (quickDatePreset === 'last_5_months') start.setUTCMonth(start.getUTCMonth() - 5);
     if (quickDatePreset === 'last_3_months') start.setUTCMonth(start.getUTCMonth() - 3);
     if (quickDatePreset === 'last_2_months') start.setUTCMonth(start.getUTCMonth() - 2);
-    if (quickDatePreset === 'past_month') start.setUTCMonth(start.getUTCMonth() - 1);
+    if (quickDatePreset === 'last_month') start.setUTCMonth(start.getUTCMonth() - 1);
     if (quickDatePreset === 'this_month') {
       start.setUTCDate(1);
     }
-    if (quickDatePreset === 'last_week') {
-      const dayNum = end.getUTCDay() || 7;
-      end.setUTCDate(end.getUTCDate() - dayNum);
-      start.setTime(end.getTime());
-      start.setUTCDate(start.getUTCDate() - 6);
-    }
+    if (quickDatePreset === 'last_30_days') start.setTime(end.getTime() - 29 * dayMs);
+    if (quickDatePreset === 'last_14_days') start.setTime(end.getTime() - 13 * dayMs);
     if (quickDatePreset === 'last_7_days') start.setTime(end.getTime() - 6 * dayMs);
     if (quickDatePreset === 'yesterday') {
       start.setTime(end.getTime() - dayMs);
@@ -779,9 +776,9 @@ export default function Page() {
 
   const ratioEvolutionRows = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
-    const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const maxAvailableDay = heatmapRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
 
-    for (const row of scopedRows) {
+    for (const row of heatmapRows) {
       const period = periodKey(row.day, granularity);
       const current = periodRevenue.get(period) ?? {};
 
@@ -810,7 +807,7 @@ export default function Page() {
         }
         return { period, ratios };
       });
-  }, [scopedRows, availableCohorts, granularity, maturedOnly]);
+  }, [heatmapRows, availableCohorts, granularity, maturedOnly]);
 
   const ratioPairs = useMemo(
     () => availableCohorts.slice(0, -1).map((from, index) => [from, availableCohorts[index + 1]] as const),
@@ -922,9 +919,10 @@ export default function Page() {
             <option value="last_5_months">Last 5 months</option>
             <option value="last_3_months">Last 3 months</option>
             <option value="last_2_months">Last 2 months</option>
-            <option value="past_month">The past month</option>
+            <option value="last_month">Last month</option>
             <option value="this_month">This month</option>
-            <option value="last_week">Last week (Monday to Sunday)</option>
+            <option value="last_30_days">Last 30 days</option>
+            <option value="last_14_days">Last 14 days</option>
             <option value="last_7_days">Last 7 days</option>
             <option value="yesterday">Yesterday</option>
             <option value="custom">Custom (use start/end date)</option>
@@ -1029,20 +1027,28 @@ export default function Page() {
             </thead>
             <tbody>
               {orderedPeriods.map((period) => (
-                <tr key={period}>
-                  <th>{period}</th>
-                  <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
-                  <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                  <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                  {availableCohorts.map((cohort) => {
-                    const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
-                    return (
-                      <td key={`${period}-${cohort}`} style={heatmapStyle(value, maxRoas, isDarkMode)}>
-                        {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
-                      </td>
-                    );
-                  })}
-                </tr>
+                (() => {
+                  const rowValues = availableCohorts
+                    .map((cohort) => periodRoas.get(`${period}|||${cohort}`) ?? null)
+                    .filter((value): value is number => value !== null);
+                  const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : maxRoas;
+                  return (
+                    <tr key={period}>
+                      <th>{period}</th>
+                      <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                      <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                      <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                      {availableCohorts.map((cohort) => {
+                        const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
+                        return (
+                          <td key={`${period}-${cohort}`} style={heatmapStyle(value, rowMax, isDarkMode)}>
+                            {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })()
               ))}
             </tbody>
           </table>
@@ -1069,27 +1075,35 @@ export default function Page() {
                 </thead>
                 <tbody>
                   {orderedPeriods.map((period) => (
-                    <tr key={`pred-${period}`}>
-                      <th>{period}</th>
-                      <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
-                      <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                      <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                      {availableCohorts.map((cohort) => {
-                        const cellKey = `${period}|||${cohort}`;
-                        const value = predictedRoas.get(cellKey) ?? null;
-                        const isPredicted = predictedMask.get(cellKey) ?? false;
-                        return (
-                          <td
-                            key={`pred-${period}-${cohort}`}
-                            className={isPredicted ? 'predictedCell' : undefined}
-                            style={heatmapStyle(value, maxRoas, isDarkMode)}
-                            title={isPredicted ? 'Predicted value' : 'Actual value'}
-                          >
-                            {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
-                          </td>
-                        );
-                      })}
-                    </tr>
+                    (() => {
+                      const rowValues = availableCohorts
+                        .map((cohort) => predictedRoas.get(`${period}|||${cohort}`) ?? null)
+                        .filter((value): value is number => value !== null);
+                      const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : maxRoas;
+                      return (
+                        <tr key={`pred-${period}`}>
+                          <th>{period}</th>
+                          <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                          <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          {availableCohorts.map((cohort) => {
+                            const cellKey = `${period}|||${cohort}`;
+                            const value = predictedRoas.get(cellKey) ?? null;
+                            const isPredicted = predictedMask.get(cellKey) ?? false;
+                            return (
+                              <td
+                                key={`pred-${period}-${cohort}`}
+                                className={isPredicted ? 'predictedCell' : undefined}
+                                style={heatmapStyle(value, rowMax, isDarkMode)}
+                                title={isPredicted ? 'Predicted value' : 'Actual value'}
+                              >
+                                {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })()
                   ))}
                 </tbody>
               </table>
