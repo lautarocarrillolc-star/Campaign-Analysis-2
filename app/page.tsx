@@ -14,9 +14,24 @@ type DataRow = {
   country: string;
   network: string;
   campaign: string;
+  installs: number;
+  payingUsers: number;
   cost: number;
   revenueByCohort: Record<string, number>;
 };
+
+type HeatmapOrderBy = 'cohort_date' | 'os' | 'country' | 'network' | 'campaign';
+type QuickDatePreset =
+  | 'all_time'
+  | 'last_5_months'
+  | 'last_3_months'
+  | 'last_2_months'
+  | 'past_month'
+  | 'this_month'
+  | 'last_week'
+  | 'last_7_days'
+  | 'yesterday'
+  | 'custom';
 
 const OS_MAP: Record<string, DataRow['os']> = {
   google_play: 'android',
@@ -25,6 +40,11 @@ const OS_MAP: Record<string, DataRow['os']> = {
 
 function parseNumber(value: string): number {
   const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseOptionalNumber(value: string | undefined): number {
+  const parsed = Number(value ?? '');
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -70,7 +90,7 @@ function heatmapStyle(
   const ratio = maxRoas > 0 ? Math.min(Math.max(value / maxRoas, 0), 1) : 0;
   const low = { r: 30, g: 64, b: 107 };
   const mid = { r: 36, g: 128, b: 140 };
-  const high = { r: 62, g: 214, b: 46 };
+  const high = { r: 38, g: 148, b: 63 };
   const blend = (from: number, to: number, amount: number) => from + (to - from) * amount;
   const segment = ratio <= 0.55 ? ratio / 0.55 : (ratio - 0.55) / 0.45;
   const from = ratio <= 0.55 ? low : mid;
@@ -241,6 +261,8 @@ export default function Page() {
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
   const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
+  const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
+  const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('all_time');
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -271,6 +293,14 @@ export default function Page() {
           country: deriveCountry(row),
           network: row.channel?.trim() || 'unknown',
           campaign: row.campaign_network?.trim() || 'unknown',
+          installs: parseOptionalNumber(row.installs),
+          payingUsers: parseOptionalNumber(
+            row.paying_users ??
+              row.payingUsers ??
+              row.payers ??
+              row.unique_payers ??
+              row['paying users']
+          ),
           cost: parseNumber(row.cost),
           revenueByCohort
         } satisfies DataRow;
@@ -386,19 +416,71 @@ export default function Page() {
     );
   }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks, selectedCampaigns]);
 
-  const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas, maturityDiagnostics } = useMemo(() => {
+  const heatmapRows = useMemo(() => {
+    if (quickDatePreset === 'custom') {
+      return scopedRows.filter((row) => {
+        const value = row.day.toISOString().slice(0, 10);
+        if (fromDate && value < fromDate) return false;
+        if (toDate && value > toDate) return false;
+        return true;
+      });
+    }
+    if (quickDatePreset === 'all_time' || scopedRows.length === 0) {
+      return scopedRows;
+    }
+
+    const maxDate = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const start = new Date(maxDate);
+    const end = new Date(maxDate);
+    const dayMs = 86400000;
+
+    if (quickDatePreset === 'last_5_months') start.setUTCMonth(start.getUTCMonth() - 5);
+    if (quickDatePreset === 'last_3_months') start.setUTCMonth(start.getUTCMonth() - 3);
+    if (quickDatePreset === 'last_2_months') start.setUTCMonth(start.getUTCMonth() - 2);
+    if (quickDatePreset === 'past_month') start.setUTCMonth(start.getUTCMonth() - 1);
+    if (quickDatePreset === 'this_month') {
+      start.setUTCDate(1);
+    }
+    if (quickDatePreset === 'last_week') {
+      const dayNum = end.getUTCDay() || 7;
+      end.setUTCDate(end.getUTCDate() - dayNum);
+      start.setTime(end.getTime());
+      start.setUTCDate(start.getUTCDate() - 6);
+    }
+    if (quickDatePreset === 'last_7_days') start.setTime(end.getTime() - 6 * dayMs);
+    if (quickDatePreset === 'yesterday') {
+      start.setTime(end.getTime() - dayMs);
+      end.setTime(start.getTime());
+    }
+
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+    return scopedRows.filter((row) => row.day.getTime() >= startMs && row.day.getTime() <= endMs);
+  }, [scopedRows, quickDatePreset, fromDate, toDate]);
+
+  const { orderedPeriods, periodCost, periodInstalls, periodPayingUsers, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas, maturityDiagnostics } = useMemo(() => {
+    const groupKeyFromRow = (row: DataRow): string => {
+      if (heatmapOrderBy === 'os') return row.os.toUpperCase();
+      if (heatmapOrderBy === 'country') return row.country;
+      if (heatmapOrderBy === 'network') return row.network;
+      if (heatmapOrderBy === 'campaign') return row.campaign;
+      return periodKey(row.day, granularity);
+    };
     const periodAggregation = new Map<
       string,
       {
         totalCost: number;
+        totalInstalls: number;
+        totalPayingUsers: number;
         revenueByCohort: Record<string, number>;
         cohortCost: Record<string, number>;
         maturedCohortCost: Record<string, number>;
         osCost: Record<string, number>;
         osCountryCost: Record<string, Record<string, number>>;
+        maxDay: Date;
       }
     >();
-    const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const maxAvailableDay = heatmapRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const createAccumulator = (): Record<string, Record<string, Array<{ ratio: number; weight: number }>>> => ({
       android: {},
@@ -438,18 +520,24 @@ export default function Page() {
       }
     };
 
-    for (const row of scopedRows) {
-      const period = periodKey(row.day, granularity);
+    for (const row of heatmapRows) {
+      const period = groupKeyFromRow(row);
       const current = periodAggregation.get(period) ?? {
         totalCost: 0,
+        totalInstalls: 0,
+        totalPayingUsers: 0,
         revenueByCohort: {},
         cohortCost: {},
         maturedCohortCost: {},
         osCost: {},
-        osCountryCost: {}
+        osCountryCost: {},
+        maxDay: row.day
       };
       current.totalCost += row.cost;
+      current.totalInstalls += row.installs;
+      current.totalPayingUsers += row.payingUsers;
       current.osCost[row.os] = (current.osCost[row.os] ?? 0) + row.cost;
+      if (row.day > current.maxDay) current.maxDay = row.day;
       const osCountry = current.osCountryCost[row.os] ?? {};
       osCountry[row.country] = (osCountry[row.country] ?? 0) + row.cost;
       current.osCountryCost[row.os] = osCountry;
@@ -500,6 +588,8 @@ export default function Page() {
     }
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
+    const installsMap = new Map<string, number>();
+    const payingUsersMap = new Map<string, number>();
     const roasMap = new Map<string, number | null>();
     const predictedRoasMap = new Map<string, number | null>();
     const predictedMaskMap = new Map<string, boolean>();
@@ -583,9 +673,12 @@ export default function Page() {
       const values = periodAggregation.get(period);
       if (!values) return;
       costMap.set(period, values.totalCost);
+      installsMap.set(period, values.totalInstalls);
+      payingUsersMap.set(period, values.totalPayingUsers);
 
       availableCohorts.forEach((cohort) => {
-        const periodEnd = periodEndDate(period, granularity);
+        const periodEnd =
+          heatmapOrderBy === 'cohort_date' ? periodEndDate(period, granularity) : values.maxDay;
         const isFullPeriodMatured =
           periodEnd.getTime() + cohortWindowDays(cohort) * 86400000 <= maxAvailableDay.getTime();
         const revenue = values.revenueByCohort[cohort] ?? 0;
@@ -673,6 +766,8 @@ export default function Page() {
     return {
       orderedPeriods: periods,
       periodCost: costMap,
+      periodInstalls: installsMap,
+      periodPayingUsers: payingUsersMap,
       periodRoas: roasMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
@@ -680,7 +775,7 @@ export default function Page() {
       maxRoas: currentMax,
       maturityDiagnostics: maturityDiagnosticsRows.slice(0, 8)
     };
-  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
+  }, [heatmapRows, heatmapOrderBy, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
 
   const ratioEvolutionRows = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
@@ -768,6 +863,16 @@ export default function Page() {
     if (hoveredRatioIndex === null || ratioEvolutionRows.length === 0) return null;
     return chartPadding.left + (plotWidth * hoveredRatioIndex) / Math.max(ratioEvolutionRows.length - 1, 1);
   }, [hoveredRatioIndex, ratioEvolutionRows.length, chartPadding.left, plotWidth]);
+  const heatmapRowLabel =
+    heatmapOrderBy === 'cohort_date'
+      ? 'Cohort date'
+      : heatmapOrderBy === 'os'
+        ? 'OS'
+        : heatmapOrderBy === 'country'
+          ? 'Country'
+          : heatmapOrderBy === 'network'
+            ? 'Network'
+            : 'Campaign';
 
   function handleRatioMouseMove(event: ReactMouseEvent<SVGSVGElement>): void {
     if (ratioEvolutionRows.length === 0) return;
@@ -796,6 +901,33 @@ export default function Page() {
             <option value="daily">Diario</option>
             <option value="weekly">Semanal</option>
             <option value="monthly">Mensual</option>
+          </select>
+        </label>
+
+        <label>
+          Order by (heatmap/pred)
+          <select value={heatmapOrderBy} onChange={(event) => setHeatmapOrderBy(event.target.value as HeatmapOrderBy)}>
+            <option value="cohort_date">Cohort date</option>
+            <option value="os">OS</option>
+            <option value="country">Country</option>
+            <option value="network">Network</option>
+            <option value="campaign">Campaign</option>
+          </select>
+        </label>
+
+        <label>
+          Quick date selector
+          <select value={quickDatePreset} onChange={(event) => setQuickDatePreset(event.target.value as QuickDatePreset)}>
+            <option value="all_time">All time</option>
+            <option value="last_5_months">Last 5 months</option>
+            <option value="last_3_months">Last 3 months</option>
+            <option value="last_2_months">Last 2 months</option>
+            <option value="past_month">The past month</option>
+            <option value="this_month">This month</option>
+            <option value="last_week">Last week (Monday to Sunday)</option>
+            <option value="last_7_days">Last 7 days</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="custom">Custom (use start/end date)</option>
           </select>
         </label>
 
@@ -878,7 +1010,7 @@ export default function Page() {
           </p>
         )}
         <p className="legend">
-          Tabla por Cohort Date: primera columna Cohort date, segunda columna Ad spend y luego ROAS en porcentaje por
+          Tabla heatmap: primera columna según Order by, luego Ad spend, Installs, Paying users y ROAS en porcentaje por
           cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
           completas.
         </p>
@@ -886,8 +1018,10 @@ export default function Page() {
           <table className="heatmap">
             <thead>
               <tr>
-                <th>Cohort date</th>
+                <th>{heatmapRowLabel}</th>
                 <th>Ad spend</th>
+                <th>Installs</th>
+                <th>Paying users</th>
                 {availableCohorts.map((cohort) => (
                   <th key={cohort}>{formatCohort(cohort)}</th>
                 ))}
@@ -898,6 +1032,8 @@ export default function Page() {
                 <tr key={period}>
                   <th>{period}</th>
                   <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                  <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                  <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
                   {availableCohorts.map((cohort) => {
                     const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
                     return (
@@ -922,8 +1058,10 @@ export default function Page() {
               <table className="heatmap">
                 <thead>
                   <tr>
-                    <th>Cohort date</th>
+                    <th>{heatmapRowLabel}</th>
                     <th>Ad spend</th>
+                    <th>Installs</th>
+                    <th>Paying users</th>
                     {availableCohorts.map((cohort) => (
                       <th key={`pred-${cohort}`}>{formatCohort(cohort)}</th>
                     ))}
@@ -934,6 +1072,8 @@ export default function Page() {
                     <tr key={`pred-${period}`}>
                       <th>{period}</th>
                       <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                      <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                      <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
                       {availableCohorts.map((cohort) => {
                         const cellKey = `${period}|||${cohort}`;
                         const value = predictedRoas.get(cellKey) ?? null;
