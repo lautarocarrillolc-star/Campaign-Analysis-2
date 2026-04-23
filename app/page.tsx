@@ -2,6 +2,7 @@
 
 import Papa from 'papaparse';
 import { useEffect, useMemo, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 
 type Granularity = 'daily' | 'weekly' | 'monthly';
 
@@ -224,6 +225,7 @@ export default function Page() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
   const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
+  const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -720,6 +722,32 @@ export default function Page() {
     1.2,
     ...activeSeries.flatMap((series) => series.values.filter((value): value is number => value !== null))
   );
+  const ratioYTicks = [0, 1, 2, 3, 4].map((tick) => ({
+    y: chartPadding.top + (plotHeight * tick) / 4,
+    value: maxRatioValue * (1 - tick / 4)
+  }));
+  const hoveredRatioDetails = useMemo(() => {
+    if (hoveredRatioIndex === null) return null;
+    const row = ratioEvolutionRows[hoveredRatioIndex];
+    if (!row) return null;
+    return {
+      period: row.period,
+      details: activeSeries
+        .map((series) => ({ label: series.label, value: series.values[hoveredRatioIndex] }))
+        .filter((entry): entry is { label: string; value: number } => entry.value !== null)
+    };
+  }, [hoveredRatioIndex, ratioEvolutionRows, activeSeries]);
+
+  function handleRatioMouseMove(event: ReactMouseEvent<SVGSVGElement>): void {
+    if (ratioEvolutionRows.length === 0) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const pointerX = event.clientX - bounds.left;
+    const relativeX = (pointerX / bounds.width) * chartWidth;
+    const clampedX = Math.min(Math.max(relativeX, chartPadding.left), chartWidth - chartPadding.right);
+    const ratio = (clampedX - chartPadding.left) / Math.max(plotWidth, 1);
+    const nextIndex = Math.round(ratio * Math.max(ratioEvolutionRows.length - 1, 0));
+    setHoveredRatioIndex(nextIndex);
+  }
 
   return (
     <main className="layout">
@@ -953,7 +981,7 @@ export default function Page() {
               {ratioView === 'table' ? 'Ver como gráfico' : 'Ver como tabla'}
             </button>
           </div>
-          <p className="legend">Cada línea es un jump ratio. Eje X = cohort date.</p>
+          <p className="legend">Cada línea es un jump ratio. Eje X = cohort date. Eje Y = ratio.</p>
           <div className="ratioToggleWrap">
             {ratioChartSeries.map((series) => {
               const active = selectedRatioKeys.includes(series.key);
@@ -976,49 +1004,80 @@ export default function Page() {
           </div>
 
           {ratioView === 'chart' ? (
-            <svg className="ratioChart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Ratio chart">
-              {[0, 1, 2, 3, 4].map((tick) => {
-                const y = chartPadding.top + (plotHeight * tick) / 4;
-                return <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />;
-              })}
-              <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
-              <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
+            <div className="ratioChartWrap">
+              <svg
+                className="ratioChart"
+                viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                role="img"
+                aria-label="Ratio chart"
+                onMouseMove={handleRatioMouseMove}
+                onMouseLeave={() => setHoveredRatioIndex(null)}
+              >
+                {ratioYTicks.map(({ y }, tick) => (
+                  <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />
+                ))}
+                <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
+                <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
+                <text x={14} y={chartPadding.top + 6} className="axisLabel">Ratio</text>
+                {ratioYTicks.map(({ y, value }) => (
+                  <text key={`ytick-${y}`} x={chartPadding.left - 8} y={y + 4} textAnchor="end" className="axisLabel">
+                    {value.toFixed(2)}x
+                  </text>
+                ))}
 
-              {ratioEvolutionRows.length > 0 && (
-                <>
-                  <text x={chartPadding.left} y={chartHeight - 8} className="axisLabel">{ratioEvolutionRows[0].period}</text>
-                  <text x={chartPadding.left + plotWidth / 2 - 36} y={chartHeight - 8} className="axisLabel">
-                    {ratioEvolutionRows[Math.floor((ratioEvolutionRows.length - 1) / 2)]?.period}
-                  </text>
-                  <text x={chartWidth - chartPadding.right - 84} y={chartHeight - 8} className="axisLabel">
-                    {ratioEvolutionRows[ratioEvolutionRows.length - 1]?.period}
-                  </text>
-                </>
+                {ratioEvolutionRows.length > 0 && (
+                  <>
+                    <text x={chartPadding.left} y={chartHeight - 8} className="axisLabel">{ratioEvolutionRows[0].period}</text>
+                    <text x={chartPadding.left + plotWidth / 2 - 36} y={chartHeight - 8} className="axisLabel">
+                      {ratioEvolutionRows[Math.floor((ratioEvolutionRows.length - 1) / 2)]?.period}
+                    </text>
+                    <text x={chartWidth - chartPadding.right - 84} y={chartHeight - 8} className="axisLabel">
+                      {ratioEvolutionRows[ratioEvolutionRows.length - 1]?.period}
+                    </text>
+                  </>
+                )}
+
+                {activeSeries.map((series) => {
+                  type RatioPoint = { x: number; y: number; value: number; period: string };
+                  const points = series.values
+                    .map((value, index) => {
+                      if (value === null) return null;
+                      const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
+                      const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
+                      return { x, y, value, period: ratioEvolutionRows[index].period };
+                    })
+                    .filter((point): point is RatioPoint => point !== null);
+                  const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
+                  return (
+                    <g key={`line-${series.key}`}>
+                      <path d={d} stroke={series.color} className="ratioLine" />
+                      {points.map((point) => (
+                        <circle key={`${series.key}-${point.x}`} cx={point.x} cy={point.y} r={4} fill={series.color} className="ratioPoint">
+                          <title>{`${series.label} | ${point.period} | ${point.value.toFixed(3)}x`}</title>
+                        </circle>
+                      ))}
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {hoveredRatioDetails && (
+                <div className="ratioHoverPanel">
+                  <b>Cohort date {hoveredRatioDetails.period}</b>
+                  <ul>
+                    {hoveredRatioDetails.details.length > 0 ? (
+                      hoveredRatioDetails.details.map((entry) => (
+                        <li key={`hover-${entry.label}`}>
+                          {entry.label} = {entry.value.toFixed(3)}x
+                        </li>
+                      ))
+                    ) : (
+                      <li>Sin ratios en este punto.</li>
+                    )}
+                  </ul>
+                </div>
               )}
-
-              {activeSeries.map((series) => {
-                type RatioPoint = { x: number; y: number; value: number; period: string };
-                const points = series.values
-                  .map((value, index) => {
-                    if (value === null) return null;
-                    const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
-                    const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                    return { x, y, value, period: ratioEvolutionRows[index].period };
-                  })
-                  .filter((point): point is RatioPoint => point !== null);
-                const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
-                return (
-                  <g key={`line-${series.key}`}>
-                    <path d={d} stroke={series.color} className="ratioLine" />
-                    {points.map((point) => (
-                      <circle key={`${series.key}-${point.x}`} cx={point.x} cy={point.y} r={4} fill={series.color} className="ratioPoint">
-                        <title>{`${series.label} | ${point.period} | ${point.value.toFixed(3)}x`}</title>
-                      </circle>
-                    ))}
-                  </g>
-                );
-              })}
-            </svg>
+            </div>
           ) : (
             <div className="heatmapScroll">
               <table className="heatmap">
