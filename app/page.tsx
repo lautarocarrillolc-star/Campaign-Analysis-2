@@ -63,22 +63,24 @@ function heatmapStyle(
 ): { backgroundColor: string; color: string } {
   if (value === null) {
     return {
-      backgroundColor: isDarkMode ? '#2a2f3a' : '#f4f4f5',
-      color: isDarkMode ? '#cfd5e1' : '#3f3f46'
+      backgroundColor: isDarkMode ? '#1f2f4d' : '#dbeafe',
+      color: '#f8fafc'
     };
   }
-  const ratio = maxRoas > 0 ? Math.min(value / maxRoas, 1) : 0;
-  const hue = 20 + 100 * ratio;
-  const saturation = isDarkMode ? 68 : 72;
-  const lightness = isDarkMode ? 22 + ratio * 28 : 92 - ratio * 40;
-  const textColor = isDarkMode
-    ? lightness >= 38
-      ? '#0b1220'
-      : '#f8fafc'
-    : '#111827';
+  const ratio = maxRoas > 0 ? Math.min(Math.max(value / maxRoas, 0), 1) : 0;
+  const low = { r: 30, g: 64, b: 107 };
+  const mid = { r: 36, g: 128, b: 140 };
+  const high = { r: 62, g: 214, b: 46 };
+  const blend = (from: number, to: number, amount: number) => from + (to - from) * amount;
+  const segment = ratio <= 0.55 ? ratio / 0.55 : (ratio - 0.55) / 0.45;
+  const from = ratio <= 0.55 ? low : mid;
+  const to = ratio <= 0.55 ? mid : high;
+  const r = Math.round(blend(from.r, to.r, segment));
+  const g = Math.round(blend(from.g, to.g, segment));
+  const b = Math.round(blend(from.b, to.b, segment));
   return {
-    backgroundColor: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
-    color: textColor
+    backgroundColor: `rgb(${r}, ${g}, ${b})`,
+    color: '#f8fafc'
   };
 }
 
