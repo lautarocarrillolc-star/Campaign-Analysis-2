@@ -68,7 +68,7 @@ function heatmapStyle(
   };
 }
 
-function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'network' | 'campaign'>): string[] {
+function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'country' | 'network' | 'campaign'>): string[] {
   return Array.from(new Set(rows.map((row) => String(row[field])))).sort((a, b) => a.localeCompare(b));
 }
 
@@ -208,6 +208,7 @@ export default function Page() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selectedOs, setSelectedOs] = useState<string[]>([]);
+  const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>([]);
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [maturedOnly, setMaturedOnly] = useState(true);
@@ -313,22 +314,35 @@ export default function Page() {
   }, [rows, fromDate, toDate]);
 
   const osOptions = useMemo(() => optionValues(filteredByDate, 'os'), [filteredByDate]);
+  const countryOptions = useMemo(() => {
+    const source = filteredByDate.filter((row) => matchesSelection(row.os, selectedOs));
+    return optionValues(source, 'country');
+  }, [filteredByDate, selectedOs]);
 
   const networkOptions = useMemo(() => {
-    const source = filteredByDate.filter((row) => matchesSelection(row.os, selectedOs));
+    const source = filteredByDate.filter(
+      (row) => matchesSelection(row.os, selectedOs) && matchesSelection(row.country, selectedCountries)
+    );
     return optionValues(source, 'network');
-  }, [filteredByDate, selectedOs]);
+  }, [filteredByDate, selectedOs, selectedCountries]);
 
   const campaignOptions = useMemo(() => {
     const source = filteredByDate.filter(
-      (row) => matchesSelection(row.os, selectedOs) && matchesSelection(row.network, selectedNetworks)
+      (row) =>
+        matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.country, selectedCountries) &&
+        matchesSelection(row.network, selectedNetworks)
     );
     return optionValues(source, 'campaign');
-  }, [filteredByDate, selectedOs, selectedNetworks]);
+  }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks]);
 
   useEffect(() => {
     setSelectedOs((current) => current.filter((value) => osOptions.includes(value)));
   }, [osOptions]);
+
+  useEffect(() => {
+    setSelectedCountries((current) => current.filter((value) => countryOptions.includes(value)));
+  }, [countryOptions]);
 
   useEffect(() => {
     setSelectedNetworks((current) => current.filter((value) => networkOptions.includes(value)));
@@ -342,10 +356,11 @@ export default function Page() {
     return filteredByDate.filter(
       (row) =>
         matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.country, selectedCountries) &&
         matchesSelection(row.network, selectedNetworks) &&
         matchesSelection(row.campaign, selectedCampaigns)
     );
-  }, [filteredByDate, selectedOs, selectedNetworks, selectedCampaigns]);
+  }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks, selectedCampaigns]);
 
   const { orderedPeriods, periodCost, periodRoas, predictedRoas, predictedMask, ratioSummary, maxRoas } = useMemo(() => {
     const periodAggregation = new Map<
@@ -426,15 +441,16 @@ export default function Page() {
 
       periodAggregation.set(period, current);
     }
+    const baseRowsForRatios = filteredByDate.filter((row) => matchesSelection(row.country, selectedCountries));
     const campaignRows =
       selectedCampaigns.length > 0
-        ? filteredByDate.filter((row) => selectedCampaigns.includes(row.campaign))
+        ? baseRowsForRatios.filter((row) => selectedCampaigns.includes(row.campaign))
         : [];
     const networkRows =
       selectedNetworks.length > 0
-        ? filteredByDate.filter((row) => selectedNetworks.includes(row.network))
+        ? baseRowsForRatios.filter((row) => selectedNetworks.includes(row.network))
         : [];
-    const countryRows = filteredByDate;
+    const countryRows = baseRowsForRatios;
 
     accumulateRatios(campaignRows, campaignRatioAccumulator, maxAvailableDayGlobal);
     accumulateRatios(networkRows, networkRatioAccumulator, maxAvailableDayGlobal);
@@ -628,7 +644,7 @@ export default function Page() {
       ratioSummary: activeRatioSummary,
       maxRoas: currentMax
     };
-  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, enableCountryFallback]);
+  }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
 
   const ratioEvolutionRows = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
@@ -712,6 +728,8 @@ export default function Page() {
         {loadError && <p className="errorInfo">{loadError}</p>}
 
         <MultiSelect title="Sistema operativo" options={osOptions} selected={selectedOs} onChange={setSelectedOs} />
+
+        <MultiSelect title="País" options={countryOptions} selected={selectedCountries} onChange={setSelectedCountries} searchable />
 
         <MultiSelect
           title="Network"
@@ -918,3 +936,4 @@ export default function Page() {
     </main>
   );
 }
+
