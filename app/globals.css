@@ -315,6 +315,10 @@ input {
   background: color-mix(in srgb, var(--panel) 90%, #0a1628 10%);
 }
 
+.ratioChartWrap {
+  position: relative;
+}
+
 .gridLine {
   stroke: var(--border);
   stroke-dasharray: 3 4;
@@ -352,6 +356,20 @@ input {
   opacity: 1;
 }
 
+.ratioHoverPanel {
+  margin-top: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
+  font-size: 12px;
+}
+
+.ratioHoverPanel ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
 .heatmap tbody th {
   position: sticky;
   left: 0;
@@ -368,5 +386,4 @@ input {
     border-bottom: 1px solid var(--border);
   }
 }
-
 
