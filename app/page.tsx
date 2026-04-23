@@ -73,7 +73,14 @@ function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'networ
 }
 
 function formatCohort(cohortKey: string): string {
-  return `ROAS ${cohortKey.replace('all_revenue_total_', '').toUpperCase()}`;
+  return `ROAS ${normalizeCohortLabel(cohortKey)}`;
+}
+
+function normalizeCohortLabel(cohortKey: string): string {
+  const raw = cohortKey.replace('all_revenue_total_', '').toUpperCase();
+  if (raw === 'M6') return 'D180';
+  if (raw === 'M12') return 'D360';
+  return raw;
 }
 
 function cohortSortValue(cohortKey: string): number {
@@ -623,6 +630,41 @@ export default function Page() {
     };
   }, [scopedRows, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, enableCountryFallback]);
 
+  const ratioEvolutionRows = useMemo(() => {
+    const periodRevenue = new Map<string, Record<string, number>>();
+    const maxAvailableDay = scopedRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+
+    for (const row of scopedRows) {
+      const period = periodKey(row.day, granularity);
+      const current = periodRevenue.get(period) ?? {};
+
+      for (const cohort of availableCohorts) {
+        const daysNeeded = cohortWindowDays(cohort);
+        const isMatured = row.day.getTime() + daysNeeded * 86400000 <= maxAvailableDay.getTime();
+        if (!maturedOnly || isMatured) {
+          current[cohort] = (current[cohort] ?? 0) + (row.revenueByCohort[cohort] ?? 0);
+        }
+      }
+      periodRevenue.set(period, current);
+    }
+
+    const pairs = availableCohorts
+      .slice(0, -1)
+      .map((cohort, index) => [cohort, availableCohorts[index + 1]] as const);
+
+    return Array.from(periodRevenue.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, revenues]) => {
+        const ratios: Record<string, number | null> = {};
+        for (const [from, to] of pairs) {
+          const fromValue = revenues[from] ?? 0;
+          const toValue = revenues[to] ?? 0;
+          ratios[ratioKey(from, to)] = fromValue > 0 && toValue > 0 ? toValue / fromValue : null;
+        }
+        return { period, ratios };
+      });
+  }, [scopedRows, availableCohorts, granularity, maturedOnly]);
+
   return (
     <main className="layout">
       <aside className="filters">
@@ -833,7 +875,10 @@ export default function Page() {
                       {pairs.length === 0
                         ? 'sin ratios suficientes'
                         : pairs
-                            .map(([pair, ratio]) => `${pair.replace('all_revenue_total_', '').toUpperCase()}=${ratio.toFixed(3)}`)
+                            .map(([pair, ratio]) => {
+                              const [from, to] = pair.split('=>');
+                              return `${normalizeCohortLabel(from)}=>${normalizeCohortLabel(to)}=${ratio.toFixed(3)}`;
+                            })
                             .join(' | ')}
                     </li>
                   );
@@ -842,6 +887,33 @@ export default function Page() {
             </div>
           </>
         )}
+
+        <p className="legend">Ratio evolution por fecha (usando revenues filtrados).</p>
+        <div className="heatmapScroll">
+          <table className="heatmap">
+            <thead>
+              <tr>
+                <th>Cohort date</th>
+                {availableCohorts.slice(0, -1).map((from, index) => {
+                  const to = availableCohorts[index + 1];
+                  return <th key={`ratio-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {ratioEvolutionRows.map((row) => (
+                <tr key={`ratio-row-${row.period}`}>
+                  <th>{row.period}</th>
+                  {availableCohorts.slice(0, -1).map((from, index) => {
+                    const to = availableCohorts[index + 1];
+                    const value = row.ratios[ratioKey(from, to)] ?? null;
+                    return <td key={`ratio-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${value.toFixed(3)}x`}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   );
