@@ -478,7 +478,7 @@ export default function Page() {
       }
     >();
     const maxAvailableDay = heatmapRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
-    const maxAvailableDayGlobal = filteredByDate.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
+    const maxAvailableDayGlobal = rows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
     const createAccumulator = (): Record<string, Record<string, Array<{ ratio: number; weight: number }>>> => ({
       android: {},
       ios: {},
@@ -553,7 +553,7 @@ export default function Page() {
 
       periodAggregation.set(period, current);
     }
-    const baseRowsForRatios = filteredByDate.filter((row) => matchesSelection(row.country, selectedCountries));
+    const baseRowsForRatios = rows;
     const campaignRows =
       selectedCampaigns.length > 0
         ? baseRowsForRatios.filter((row) => selectedCampaigns.includes(row.campaign))
@@ -562,7 +562,10 @@ export default function Page() {
       selectedNetworks.length > 0
         ? baseRowsForRatios.filter((row) => selectedNetworks.includes(row.network))
         : [];
-    const countryRows = baseRowsForRatios;
+    const countryRows =
+      selectedCountries.length > 0
+        ? baseRowsForRatios.filter((row) => selectedCountries.includes(row.country))
+        : baseRowsForRatios;
 
     accumulateRatios(campaignRows, campaignRatioAccumulator, maxAvailableDayGlobal);
     accumulateRatios(networkRows, networkRatioAccumulator, maxAvailableDayGlobal);
@@ -780,7 +783,7 @@ export default function Page() {
       maxRoas: currentMax,
       maturityDiagnostics: maturityDiagnosticsRows.slice(0, 8)
     };
-  }, [heatmapRows, heatmapOrderBy, filteredByDate, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
+  }, [rows, heatmapRows, heatmapOrderBy, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
 
   const ratioEvolutionRows = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
@@ -1184,20 +1187,23 @@ export default function Page() {
               <ol>
                 <li>
                   Para cada salto entre cohorts (ej: D7→D14), calculamos ratios históricos con datos <b>completos</b>
-                  y usamos la <b>mediana ponderada por spend</b> para evitar outliers.
+                  usando <b>todo el histórico disponible (all-time)</b>, no solo la ventana visible.
                 </li>
                 <li>
-                  Excluimos casos donde el revenue del cohort siguiente es menor al anterior para evitar ratios
-                  contaminados por ventanas incompletas.
+                  Usamos <b>mediana ponderada por spend</b> y muestra mínima (&gt;=6) para evitar outliers y saltos
+                  inestables.
                 </li>
                 <li>
-                  Fallback jerárquico de ratios por OS: <b>campaña → network → (país si está activado) → OS global</b>.
-                  Si hay ratio suficiente a nivel campaña usamos ese; si no, subimos a network; luego país (si el
-                  toggle “Predicción por país?” está ON); y por último OS global.
+                  Fallback jerárquico por OS con histórico all-time:
+                  <b>campaña → network → (país si está activado) → OS global</b>. Si un salto tardío no tiene data
+                  suficiente en campaña (ej: Unity), sube al siguiente nivel automáticamente.
                 </li>
-                <li>Solo usamos saltos con muestra mínima (&gt;=6 puntos) para evitar ratios inestables.</li>
                 <li>
-                  Cuando falta un valor, proyectamos secuencialmente desde el último punto disponible:
+                  Si un ratio real es &lt; 1.00 o no existe, se considera no confiable para la tabla de ratios y se deja
+                  como N/A; con predicción activa se completa con el ratio estimado del fallback.
+                </li>
+                <li>
+                  Cuando falta un ROAS, proyectamos secuencialmente desde el último punto disponible:
                   <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.
                 </li>
                 <li>
@@ -1206,7 +1212,7 @@ export default function Page() {
                 </li>
               </ol>
 
-              <p className="ratioTitle">Ratios vigentes en esta vista (según filtros actuales):</p>
+              <p className="ratioTitle">Ratios vigentes en esta vista (calculados con histórico all-time + fallback):</p>
               <ul>
                 {(['android', 'ios', 'other'] as const).map((osKey) => {
                   const pairs = Object.entries(ratioSummary[osKey]);
@@ -1398,4 +1404,3 @@ export default function Page() {
     </main>
   );
 }
-
