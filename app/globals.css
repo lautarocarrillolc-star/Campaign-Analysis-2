@@ -136,6 +136,10 @@ input {
   min-height: 32px;
   padding: 6px 8px;
   font-size: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--panel);
 }
 
 .optionRow {
@@ -155,6 +159,9 @@ input {
   font-size: 12px;
   cursor: pointer;
   margin-bottom: 4px;
+  position: sticky;
+  top: 36px;
+  z-index: 2;
 }
 
 .toggleRow {
@@ -249,6 +256,72 @@ input {
   font-weight: 700;
 }
 
+.ratioChartCard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--panel);
+}
+
+.ratioChartCard h3 {
+  margin: 0 0 6px;
+}
+
+.ratioToggleWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ratioBtn {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 220ms ease;
+}
+
+.ratioBtn.active {
+  background: var(--thead);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.ratioChart {
+  width: 100%;
+  height: 300px;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 90%, #0a1628 10%);
+}
+
+.gridLine {
+  stroke: var(--border);
+  stroke-dasharray: 3 4;
+}
+
+.ratioLine {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.95;
+  transition: opacity 260ms ease, d 260ms ease;
+}
+
 .heatmap tbody th {
   position: sticky;
   left: 0;
@@ -265,4 +338,5 @@ input {
     border-bottom: 1px solid var(--border);
   }
 }
+
 
