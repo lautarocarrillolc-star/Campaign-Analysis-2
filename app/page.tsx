@@ -455,7 +455,7 @@ export default function Page() {
     return scopedRows.filter((row) => row.day.getTime() >= startMs && row.day.getTime() <= endMs);
   }, [scopedRows, quickDatePreset, fromDate, toDate]);
 
-  const { orderedPeriods, periodCost, periodInstalls, periodPayingUsers, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, maxRoas, maturityDiagnostics } = useMemo(() => {
+  const { orderedPeriods, periodCost, periodInstalls, periodCpi, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, periodJumpRatios, maxRoas, maturityDiagnostics } = useMemo(() => {
     const groupKeyFromRow = (row: DataRow): string => {
       if (heatmapOrderBy === 'os') return row.os.toUpperCase();
       if (heatmapOrderBy === 'country') return row.country;
@@ -586,7 +586,7 @@ export default function Page() {
     const periods = Array.from(periodAggregation.keys()).sort((a, b) => a.localeCompare(b));
     const costMap = new Map<string, number>();
     const installsMap = new Map<string, number>();
-    const payingUsersMap = new Map<string, number>();
+    const cpiMap = new Map<string, number | null>();
     const roasMap = new Map<string, number | null>();
     const ltvMap = new Map<string, number | null>();
     const predictedRoasMap = new Map<string, number | null>();
@@ -666,13 +666,14 @@ export default function Page() {
       ios: {},
       other: {}
     };
+    const periodJumpRatiosMap = new Map<string, Record<string, number>>();
 
     periods.forEach((period) => {
       const values = periodAggregation.get(period);
       if (!values) return;
       costMap.set(period, values.totalCost);
       installsMap.set(period, values.totalInstalls);
-      payingUsersMap.set(period, values.totalPayingUsers);
+      cpiMap.set(period, values.totalInstalls > 0 ? values.totalCost / values.totalInstalls : null);
 
       availableCohorts.forEach((cohort) => {
         const periodEnd =
@@ -721,6 +722,7 @@ export default function Page() {
           periodRatios[key] = blended / usedWeight;
         }
       });
+      periodJumpRatiosMap.set(period, periodRatios);
 
       availableCohorts.forEach((cohort, cohortIndex) => {
         const cellKey = `${period}|||${cohort}`;
@@ -768,12 +770,13 @@ export default function Page() {
       orderedPeriods: periods,
       periodCost: costMap,
       periodInstalls: installsMap,
-      periodPayingUsers: payingUsersMap,
+      periodCpi: cpiMap,
       periodRoas: roasMap,
       periodLtv: ltvMap,
       predictedRoas: predictedRoasMap,
       predictedMask: predictedMaskMap,
       ratioSummary: activeRatioSummary,
+      periodJumpRatios: periodJumpRatiosMap,
       maxRoas: currentMax,
       maturityDiagnostics: maturityDiagnosticsRows.slice(0, 8)
     };
@@ -805,14 +808,25 @@ export default function Page() {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([period, revenues]) => {
         const ratios: Record<string, number | null> = {};
+        const predicted: Record<string, boolean> = {};
+        const fallbackRatios = periodJumpRatios.get(period) ?? {};
         for (const [from, to] of pairs) {
+          const key = ratioKey(from, to);
           const fromValue = revenues[from] ?? 0;
           const toValue = revenues[to] ?? 0;
-          ratios[ratioKey(from, to)] = fromValue > 0 && toValue > 0 ? toValue / fromValue : null;
+          const realRatio = fromValue > 0 && toValue > 0 ? toValue / fromValue : null;
+          if (realRatio !== null && realRatio >= 1) {
+            ratios[key] = realRatio;
+            predicted[key] = false;
+            continue;
+          }
+          const predictedRatio = enablePrediction ? fallbackRatios[key] ?? null : null;
+          ratios[key] = predictedRatio !== null && predictedRatio >= 1 ? predictedRatio : null;
+          predicted[key] = ratios[key] !== null;
         }
-        return { period, ratios };
+        return { period, ratios, predicted };
       });
-  }, [heatmapRows, availableCohorts, granularity, maturedOnly]);
+  }, [heatmapRows, availableCohorts, granularity, maturedOnly, enablePrediction, periodJumpRatios]);
 
   const ratioPairs = useMemo(
     () => availableCohorts.slice(0, -1).map((from, index) => [from, availableCohorts[index + 1]] as const),
@@ -831,7 +845,8 @@ export default function Page() {
         key,
         label: `${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`,
         color: palette[index % palette.length],
-        values: ratioEvolutionRows.map((row) => row.ratios[key] ?? null)
+        values: ratioEvolutionRows.map((row) => row.ratios[key] ?? null),
+        predicted: ratioEvolutionRows.map((row) => row.predicted[key] ?? false)
       };
     });
   }, [ratioPairs, ratioEvolutionRows]);
@@ -857,8 +872,8 @@ export default function Page() {
     return {
       period: row.period,
       details: activeSeries
-        .map((series) => ({ label: series.label, color: series.color, value: series.values[hoveredRatioIndex] }))
-        .filter((entry): entry is { label: string; color: string; value: number } => entry.value !== null)
+        .map((series) => ({ label: series.label, color: series.color, value: series.values[hoveredRatioIndex], predicted: series.predicted[hoveredRatioIndex] ?? false }))
+        .filter((entry): entry is { label: string; color: string; value: number; predicted: boolean } => entry.value !== null)
     };
   }, [hoveredRatioIndex, ratioEvolutionRows, activeSeries]);
   const hoveredRatioX = useMemo(() => {
@@ -1013,7 +1028,7 @@ export default function Page() {
           </p>
         )}
         <p className="legend">
-          Tabla heatmap: primera columna según Order by, luego Ad spend, Installs, Paying users y ROAS en porcentaje por
+          Tabla heatmap: primera columna según Order by, luego Ad spend, Installs, CPI y ROAS en porcentaje por
           cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
           completas.
         </p>
@@ -1027,7 +1042,7 @@ export default function Page() {
                     <th>{heatmapRowLabel}</th>
                     <th>Ad spend</th>
                     <th>Installs</th>
-                    <th>Paying users</th>
+                    <th>CPI</th>
                     {availableCohorts.map((cohort) => (
                       <th key={cohort}>{formatCohort(cohort)}</th>
                     ))}
@@ -1045,7 +1060,7 @@ export default function Page() {
                           <th>{period}</th>
                           <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                           <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                          <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
                           {availableCohorts.map((cohort) => {
                             const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
                             return (
@@ -1072,7 +1087,7 @@ export default function Page() {
                     <th>{heatmapRowLabel}</th>
                     <th>Ad spend</th>
                     <th>Installs</th>
-                    <th>Paying users</th>
+                    <th>CPI</th>
                     {availableCohorts.map((cohort) => (
                       <th key={`ltv-${cohort}`}>{`LTV ${normalizeCohortLabel(cohort)}`}</th>
                     ))}
@@ -1090,7 +1105,7 @@ export default function Page() {
                           <th>{period}</th>
                           <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                           <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                          <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
                           {availableCohorts.map((cohort) => {
                             const value = periodLtv.get(`${period}|||${cohort}`) ?? null;
                             return (
@@ -1122,7 +1137,7 @@ export default function Page() {
                     <th>{heatmapRowLabel}</th>
                     <th>Ad spend</th>
                     <th>Installs</th>
-                    <th>Paying users</th>
+                    <th>CPI</th>
                     {availableCohorts.map((cohort) => (
                       <th key={`pred-${cohort}`}>{formatCohort(cohort)}</th>
                     ))}
@@ -1140,7 +1155,7 @@ export default function Page() {
                           <th>{period}</th>
                           <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                           <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                          <td>{(periodPayingUsers.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                          <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
                           {availableCohorts.map((cohort) => {
                             const cellKey = `${period}|||${cohort}`;
                             const value = predictedRoas.get(cellKey) ?? null;
@@ -1290,22 +1305,31 @@ export default function Page() {
                 )}
 
                 {activeSeries.map((series) => {
-                  type RatioPoint = { x: number; y: number; value: number; period: string };
+                  type RatioPoint = { x: number; y: number; value: number; period: string; predicted: boolean };
                   const points = series.values
                     .map((value, index) => {
                       if (value === null) return null;
                       const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
                       const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                      return { x, y, value, period: ratioEvolutionRows[index].period };
+                      return { x, y, value, period: ratioEvolutionRows[index].period, predicted: series.predicted[index] ?? false };
                     })
                     .filter((point): point is RatioPoint => point !== null);
-                  const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
+                  const realPoints = points.filter((point) => !point.predicted);
+                  const d = buildLinePath(realPoints.map((point) => ({ x: point.x, y: point.y })));
                   return (
                     <g key={`line-${series.key}`}>
                       <path d={d} stroke={series.color} className="ratioLine" />
                       {points.map((point) => (
-                        <circle key={`${series.key}-${point.x}`} cx={point.x} cy={point.y} r={4} fill={series.color} className="ratioPoint">
-                          <title>{`${series.label} | ${point.period} | ${point.value.toFixed(3)}x`}</title>
+                        <circle
+                          key={`${series.key}-${point.x}`}
+                          cx={point.x}
+                          cy={point.y}
+                          r={point.predicted ? 3.5 : 4}
+                          fill={point.predicted ? 'transparent' : series.color}
+                          stroke={series.color}
+                          className={point.predicted ? 'ratioPredictedPoint' : 'ratioPoint'}
+                        >
+                          <title>{`${series.label} | ${point.period} | ${point.value.toFixed(3)}x${point.predicted ? ' (pred)' : ''}`}</title>
                         </circle>
                       ))}
                     </g>
@@ -1330,7 +1354,7 @@ export default function Page() {
                     {hoveredRatioDetails.details.length > 0 ? (
                       hoveredRatioDetails.details.map((entry) => (
                         <li key={`hover-${entry.label}`}>
-                          <span className="hoverLabel" style={{ color: entry.color }}>{entry.label}</span> = {entry.value.toFixed(3)}x
+                          <span className="hoverLabel" style={{ color: entry.color }}>{entry.label}</span> = {entry.value.toFixed(3)}x{entry.predicted ? ' (pred)' : ''}
                         </li>
                       ))
                     ) : (
@@ -1358,8 +1382,10 @@ export default function Page() {
                       <th>{row.period}</th>
                       {availableCohorts.slice(0, -1).map((from, index) => {
                         const to = availableCohorts[index + 1];
-                        const value = row.ratios[ratioKey(from, to)] ?? null;
-                        return <td key={`ratio-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${value.toFixed(3)}x`}</td>;
+                        const key = ratioKey(from, to);
+                        const value = row.ratios[key] ?? null;
+                        const isPredicted = row.predicted[key] ?? false;
+                        return <td key={`ratio-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}</td>;
                       })}
                     </tr>
                   ))}
@@ -1372,3 +1398,4 @@ export default function Page() {
     </main>
   );
 }
+
