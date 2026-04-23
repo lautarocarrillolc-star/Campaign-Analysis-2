@@ -124,6 +124,11 @@ function deriveCountry(row: CsvRow): string {
   return match?.[1] ?? 'UNKNOWN';
 }
 
+function buildLinePath(points: Array<{ x: number; y: number }>): string {
+  if (points.length === 0) return '';
+  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+}
+
 function matchesSelection(value: string, selectedValues: string[]): boolean {
   return selectedValues.length === 0 || selectedValues.includes(value);
 }
@@ -217,6 +222,7 @@ export default function Page() {
   const [enableCountryFallback, setEnableCountryFallback] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
+  const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -681,6 +687,39 @@ export default function Page() {
       });
   }, [scopedRows, availableCohorts, granularity, maturedOnly]);
 
+  const ratioPairs = useMemo(
+    () => availableCohorts.slice(0, -1).map((from, index) => [from, availableCohorts[index + 1]] as const),
+    [availableCohorts]
+  );
+
+  useEffect(() => {
+    setSelectedRatioKeys(ratioPairs.map(([from, to]) => ratioKey(from, to)));
+  }, [ratioPairs]);
+
+  const ratioChartSeries = useMemo(() => {
+    const palette = ['#38bdf8', '#6ee7b7', '#a78bfa', '#fca5a5', '#fcd34d', '#60a5fa', '#e879f9', '#22d3ee'];
+    return ratioPairs.map(([from, to], index) => {
+      const key = ratioKey(from, to);
+      return {
+        key,
+        label: `${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`,
+        color: palette[index % palette.length],
+        values: ratioEvolutionRows.map((row) => row.ratios[key] ?? null)
+      };
+    });
+  }, [ratioPairs, ratioEvolutionRows]);
+
+  const chartWidth = 980;
+  const chartHeight = 300;
+  const chartPadding = { top: 20, right: 16, bottom: 30, left: 44 };
+  const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
+  const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+  const activeSeries = ratioChartSeries.filter((series) => selectedRatioKeys.includes(series.key));
+  const maxRatioValue = Math.max(
+    1.2,
+    ...activeSeries.flatMap((series) => series.values.filter((value): value is number => value !== null))
+  );
+
   return (
     <main className="layout">
       <aside className="filters">
@@ -906,6 +945,51 @@ export default function Page() {
           </>
         )}
 
+        <div className="ratioChartCard">
+          <h3>Ratio Evolution By Date</h3>
+          <p className="legend">Cada línea es un jump ratio. Eje X = cohort date.</p>
+          <div className="ratioToggleWrap">
+            {ratioChartSeries.map((series) => {
+              const active = selectedRatioKeys.includes(series.key);
+              return (
+                <button
+                  key={`btn-${series.key}`}
+                  type="button"
+                  className={`ratioBtn ${active ? 'active' : ''}`}
+                  onClick={() =>
+                    setSelectedRatioKeys((current) =>
+                      current.includes(series.key) ? current.filter((key) => key !== series.key) : [...current, series.key]
+                    )
+                  }
+                >
+                  <span className="dot" style={{ backgroundColor: series.color }} />
+                  {series.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <svg className="ratioChart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Ratio chart">
+            {[0, 1, 2, 3, 4].map((tick) => {
+              const y = chartPadding.top + (plotHeight * tick) / 4;
+              return <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />;
+            })}
+
+            {activeSeries.map((series) => {
+              const points = series.values
+                .map((value, index) => {
+                  if (value === null) return null;
+                  const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
+                  const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
+                  return { x, y };
+                })
+                .filter((point): point is { x: number; y: number } => point !== null);
+              const d = buildLinePath(points);
+              return <path key={`line-${series.key}`} d={d} stroke={series.color} className="ratioLine" />;
+            })}
+          </svg>
+        </div>
+
         <p className="legend">Ratio evolution por fecha (usando revenues filtrados).</p>
         <div className="heatmapScroll">
           <table className="heatmap">
@@ -936,3 +1020,4 @@ export default function Page() {
     </main>
   );
 }
+
