@@ -220,6 +220,7 @@ export default function Page() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [enablePrediction, setEnablePrediction] = useState(false);
   const [enableCountryFallback, setEnableCountryFallback] = useState(true);
+  const [ratioView, setRatioView] = useState<'table' | 'chart'>('table');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
   const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
@@ -946,7 +947,12 @@ export default function Page() {
         )}
 
         <div className="ratioChartCard">
-          <h3>Ratio Evolution By Date</h3>
+          <div className="ratioHeader">
+            <h3>Ratio Evolution By Date</h3>
+            <button type="button" className="modeBtn" onClick={() => setRatioView((v) => (v === 'table' ? 'chart' : 'table'))}>
+              {ratioView === 'table' ? 'Ver como gráfico' : 'Ver como tabla'}
+            </button>
+          </div>
           <p className="legend">Cada línea es un jump ratio. Eje X = cohort date.</p>
           <div className="ratioToggleWrap">
             {ratioChartSeries.map((series) => {
@@ -969,52 +975,76 @@ export default function Page() {
             })}
           </div>
 
-          <svg className="ratioChart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Ratio chart">
-            {[0, 1, 2, 3, 4].map((tick) => {
-              const y = chartPadding.top + (plotHeight * tick) / 4;
-              return <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />;
-            })}
+          {ratioView === 'chart' ? (
+            <svg className="ratioChart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Ratio chart">
+              {[0, 1, 2, 3, 4].map((tick) => {
+                const y = chartPadding.top + (plotHeight * tick) / 4;
+                return <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />;
+              })}
+              <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
+              <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
 
-            {activeSeries.map((series) => {
-              const points = series.values
-                .map((value, index) => {
-                  if (value === null) return null;
-                  const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
-                  const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                  return { x, y };
-                })
-                .filter((point): point is { x: number; y: number } => point !== null);
-              const d = buildLinePath(points);
-              return <path key={`line-${series.key}`} d={d} stroke={series.color} className="ratioLine" />;
-            })}
-          </svg>
-        </div>
+              {ratioEvolutionRows.length > 0 && (
+                <>
+                  <text x={chartPadding.left} y={chartHeight - 8} className="axisLabel">{ratioEvolutionRows[0].period}</text>
+                  <text x={chartPadding.left + plotWidth / 2 - 36} y={chartHeight - 8} className="axisLabel">
+                    {ratioEvolutionRows[Math.floor((ratioEvolutionRows.length - 1) / 2)]?.period}
+                  </text>
+                  <text x={chartWidth - chartPadding.right - 84} y={chartHeight - 8} className="axisLabel">
+                    {ratioEvolutionRows[ratioEvolutionRows.length - 1]?.period}
+                  </text>
+                </>
+              )}
 
-        <p className="legend">Ratio evolution por fecha (usando revenues filtrados).</p>
-        <div className="heatmapScroll">
-          <table className="heatmap">
-            <thead>
-              <tr>
-                <th>Cohort date</th>
-                {availableCohorts.slice(0, -1).map((from, index) => {
-                  const to = availableCohorts[index + 1];
-                  return <th key={`ratio-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {ratioEvolutionRows.map((row) => (
-                <tr key={`ratio-row-${row.period}`}>
-                  <th>{row.period}</th>
-                  {availableCohorts.slice(0, -1).map((from, index) => {
-                    const to = availableCohorts[index + 1];
-                    const value = row.ratios[ratioKey(from, to)] ?? null;
-                    return <td key={`ratio-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${value.toFixed(3)}x`}</td>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              {activeSeries.map((series) => {
+                const points = series.values
+                  .map((value, index) => {
+                    if (value === null) return null;
+                    const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
+                    const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
+                    return { x, y, value, period: ratioEvolutionRows[index]?.period };
+                  })
+                  .filter((point): point is { x: number; y: number; value: number; period?: string } => point !== null);
+                const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
+                return (
+                  <g key={`line-${series.key}`}>
+                    <path d={d} stroke={series.color} className="ratioLine" />
+                    {points.map((point) => (
+                      <circle key={`${series.key}-${point.x}`} cx={point.x} cy={point.y} r={4} fill={series.color} className="ratioPoint">
+                        <title>{`${series.label} | ${point.period ?? ''} | ${point.value.toFixed(3)}x`}</title>
+                      </circle>
+                    ))}
+                  </g>
+                );
+              })}
+            </svg>
+          ) : (
+            <div className="heatmapScroll">
+              <table className="heatmap">
+                <thead>
+                  <tr>
+                    <th>Cohort date</th>
+                    {availableCohorts.slice(0, -1).map((from, index) => {
+                      const to = availableCohorts[index + 1];
+                      return <th key={`ratio-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ratioEvolutionRows.map((row) => (
+                    <tr key={`ratio-row-${row.period}`}>
+                      <th>{row.period}</th>
+                      {availableCohorts.slice(0, -1).map((from, index) => {
+                        const to = availableCohorts[index + 1];
+                        const value = row.ratios[ratioKey(from, to)] ?? null;
+                        return <td key={`ratio-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${value.toFixed(3)}x`}</td>;
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </section>
     </main>
