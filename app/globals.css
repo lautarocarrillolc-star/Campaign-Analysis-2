@@ -196,6 +196,12 @@ input {
   transition: all 260ms ease;
 }
 
+.dualHeatmapGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
 .heatmap {
   border-collapse: collapse;
   width: max-content;
@@ -396,6 +402,10 @@ input {
 }
 
 @media (max-width: 950px) {
+  .dualHeatmapGrid {
+    grid-template-columns: 1fr;
+  }
+
   .layout {
     grid-template-columns: 1fr;
   }
