@@ -423,7 +423,7 @@ export default function Page() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [enablePrediction, setEnablePrediction] = useState(false);
   const [enableCountryFallback, setEnableCountryFallback] = useState(true);
-  const [ratioView, setRatioView] = useState<'table' | 'chart'>('table');
+  const [compareMode, setCompareMode] = useState<'previous_period' | 'none'>('previous_period');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
   const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
@@ -1096,28 +1096,27 @@ export default function Page() {
       });
   }, [heatmapRows, availableCohorts, granularity, maturedOnly, enablePrediction, periodJumpRatios]);
 
-  const ratioPairs = useMemo(
-    () => availableCohorts.slice(0, -1).map((from, index) => [from, availableCohorts[index + 1]] as const),
-    [availableCohorts]
-  );
+  const evolutionSeries = useMemo(() => {
+    const palette = ['#56a8ff', '#fbbf24', '#6ee7b7', '#a78bfa', '#38bdf8', '#f472b6', '#93c5fd', '#22d3ee'];
+    const visiblePeriods = orderedPeriods.slice(-8);
+    return visiblePeriods.map((period, index) => ({
+      key: period,
+      label: period,
+      color: palette[index % palette.length],
+      values: availableCohorts.map((cohort) => {
+        const key = `${period}|||${cohort}`;
+        return enablePrediction ? predictedRoas.get(key) ?? null : periodRoas.get(key) ?? null;
+      }),
+      predicted: availableCohorts.map((cohort) => {
+        const key = `${period}|||${cohort}`;
+        return enablePrediction ? predictedMask.get(key) ?? false : false;
+      })
+    }));
+  }, [orderedPeriods, availableCohorts, enablePrediction, predictedRoas, periodRoas, predictedMask]);
 
   useEffect(() => {
-    setSelectedRatioKeys(ratioPairs.map(([from, to]) => ratioKey(from, to)));
-  }, [ratioPairs]);
-
-  const ratioChartSeries = useMemo(() => {
-    const palette = ['#38bdf8', '#6ee7b7', '#a78bfa', '#fca5a5', '#fcd34d', '#60a5fa', '#e879f9', '#22d3ee'];
-    return ratioPairs.map(([from, to], index) => {
-      const key = ratioKey(from, to);
-      return {
-        key,
-        label: `${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`,
-        color: palette[index % palette.length],
-        values: ratioEvolutionRows.map((row) => row.ratios[key] ?? null),
-        predicted: ratioEvolutionRows.map((row) => row.predicted[key] ?? false)
-      };
-    });
-  }, [ratioPairs, ratioEvolutionRows]);
+    setSelectedRatioKeys(evolutionSeries.map((series) => series.key));
+  }, [evolutionSeries]);
 
   useEffect(() => {
     (globalThis as Record<string, unknown>).__ratioDebug = ratioDebugInfo;
@@ -1128,9 +1127,9 @@ export default function Page() {
   const chartPadding = { top: 20, right: 16, bottom: 30, left: 44 };
   const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
   const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
-  const activeSeries = ratioChartSeries.filter((series) => selectedRatioKeys.includes(series.key));
+  const activeSeries = evolutionSeries.filter((series) => selectedRatioKeys.includes(series.key));
   const maxRatioValue = Math.max(
-    1.2,
+    1,
     ...activeSeries.flatMap((series) => series.values.filter((value): value is number => value !== null))
   );
   const ratioYTicks = [0, 1, 2, 3, 4].map((tick) => ({
@@ -1139,19 +1138,19 @@ export default function Page() {
   }));
   const hoveredRatioDetails = useMemo(() => {
     if (hoveredRatioIndex === null) return null;
-    const row = ratioEvolutionRows[hoveredRatioIndex];
-    if (!row) return null;
+    const cohort = availableCohorts[hoveredRatioIndex];
+    if (!cohort) return null;
     return {
-      period: row.period,
+      cohort: normalizeCohortLabel(cohort),
       details: activeSeries
         .map((series) => ({ label: series.label, color: series.color, value: series.values[hoveredRatioIndex], predicted: series.predicted[hoveredRatioIndex] ?? false }))
         .filter((entry): entry is { label: string; color: string; value: number; predicted: boolean } => entry.value !== null)
     };
-  }, [hoveredRatioIndex, ratioEvolutionRows, activeSeries]);
+  }, [hoveredRatioIndex, availableCohorts, activeSeries]);
   const hoveredRatioX = useMemo(() => {
-    if (hoveredRatioIndex === null || ratioEvolutionRows.length === 0) return null;
-    return chartPadding.left + (plotWidth * hoveredRatioIndex) / Math.max(ratioEvolutionRows.length - 1, 1);
-  }, [hoveredRatioIndex, ratioEvolutionRows.length, chartPadding.left, plotWidth]);
+    if (hoveredRatioIndex === null || availableCohorts.length === 0) return null;
+    return chartPadding.left + (plotWidth * hoveredRatioIndex) / Math.max(availableCohorts.length - 1, 1);
+  }, [hoveredRatioIndex, availableCohorts.length, chartPadding.left, plotWidth]);
   const heatmapRowLabel =
     heatmapOrderBy === 'cohort_date'
       ? 'Cohort date'
@@ -1221,19 +1220,113 @@ export default function Page() {
         ? targetD7ForPositiveD180.reduce((sum, value) => sum + value, 0) / targetD7ForPositiveD180.length
         : null;
 
-    return { roasD7, roasD14, roasD30, spendTotal, cpiAverage, paybackWindowAverage, targetRoasD7, recoveredCount: recoveredPeriods.length };
-  }, [availableCohorts, orderedPeriods, periodCost, periodInstalls, periodRoas]);
+    const buildTrend = (resolver: (period: string) => number | null): Array<number | null> =>
+      orderedPeriods.map((period) => resolver(period));
+    const latestVsPrevious = (values: Array<number | null>): { latest: number | null; previous: number | null; deltaPct: number | null } => {
+      const valid = values.filter((value): value is number => value !== null);
+      if (valid.length === 0) return { latest: null, previous: null, deltaPct: null };
+      const latest = valid[valid.length - 1];
+      const previous = valid[valid.length - 2] ?? null;
+      if (compareMode === 'none' || previous === null || previous === 0) {
+        return { latest, previous, deltaPct: null };
+      }
+      return { latest, previous, deltaPct: ((latest - previous) / previous) * 100 };
+    };
+
+    const metricsTrend = {
+      roasD7: buildTrend((period) => (cohortD7 ? periodRoas.get(`${period}|||${cohortD7}`) ?? null : null)),
+      roasD14: buildTrend((period) => (cohortD14 ? periodRoas.get(`${period}|||${cohortD14}`) ?? null : null)),
+      roasD30: buildTrend((period) => (cohortD30 ? periodRoas.get(`${period}|||${cohortD30}`) ?? null : null)),
+      spend: buildTrend((period) => periodCost.get(period) ?? null),
+      cpi: buildTrend((period) => periodCpi.get(period) ?? null),
+      payback: buildTrend((period) => {
+        if (!cohortD180) return null;
+        const roas180 = periodRoas.get(`${period}|||${cohortD180}`) ?? null;
+        if (roas180 === null || roas180 < 1) return null;
+        const recoveredDay = availableCohorts
+          .slice()
+          .sort((a, b) => cohortWindowDays(a) - cohortWindowDays(b))
+          .find((cohort) => {
+            const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
+            return value !== null && value >= 1;
+          });
+        return recoveredDay ? cohortWindowDays(recoveredDay) : null;
+      })
+    };
+
+    return {
+      roasD7,
+      roasD14,
+      roasD30,
+      spendTotal,
+      cpiAverage,
+      paybackWindowAverage,
+      targetRoasD7,
+      recoveredCount: recoveredPeriods.length,
+      trends: metricsTrend,
+      deltas: {
+        roasD7: latestVsPrevious(metricsTrend.roasD7),
+        roasD14: latestVsPrevious(metricsTrend.roasD14),
+        roasD30: latestVsPrevious(metricsTrend.roasD30),
+        spend: latestVsPrevious(metricsTrend.spend),
+        cpi: latestVsPrevious(metricsTrend.cpi),
+        payback: latestVsPrevious(metricsTrend.payback)
+      }
+    };
+  }, [availableCohorts, orderedPeriods, periodCost, periodInstalls, periodRoas, periodCpi, compareMode]);
+
+  const activeFallbackLabels = useMemo(() => {
+    const latestPeriod = orderedPeriods[orderedPeriods.length - 1] ?? null;
+    const fallbackMap: Record<string, Record<string, string>> = { android: {}, ios: {}, other: {} };
+    ratioDebugInfo.forEach((entry) => {
+      const period = String((entry.period as string) ?? '');
+      if (latestPeriod && period !== latestPeriod) return;
+      const os = String((entry.os as string) ?? '').toLowerCase();
+      const pair = String((entry.ratioKey as string) ?? '');
+      if (!(os in fallbackMap) || !pair) return;
+      const counts = (entry.counts as Record<string, number> | undefined) ?? {};
+      const minSamples = Number((entry.minSamples as number | undefined) ?? 6);
+      let label = 'global';
+      if ((counts.campaign ?? 0) >= minSamples) label = 'campaña + blend';
+      else if ((counts.network ?? 0) >= minSamples) label = 'network + blend';
+      else if (enableCountryFallback && (counts.country ?? 0) >= minSamples) label = 'país + blend';
+      fallbackMap[os as 'android' | 'ios' | 'other'][pair] = label;
+    });
+    return fallbackMap;
+  }, [ratioDebugInfo, orderedPeriods, enableCountryFallback]);
 
   function handleRatioMouseMove(event: ReactMouseEvent<SVGSVGElement>): void {
-    if (ratioEvolutionRows.length === 0) return;
+    if (availableCohorts.length === 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointerX = event.clientX - bounds.left;
     const relativeX = (pointerX / bounds.width) * chartWidth;
     const clampedX = Math.min(Math.max(relativeX, chartPadding.left), chartWidth - chartPadding.right);
     const ratio = (clampedX - chartPadding.left) / Math.max(plotWidth, 1);
-    const nextIndex = Math.round(ratio * Math.max(ratioEvolutionRows.length - 1, 0));
+    const nextIndex = Math.round(ratio * Math.max(availableCohorts.length - 1, 0));
     setHoveredRatioIndex(nextIndex);
   }
+
+  const renderSparkline = (values: Array<number | null>, color: string) => {
+    const numeric = values.filter((value): value is number => value !== null);
+    if (numeric.length < 2) return null;
+    const min = Math.min(...numeric);
+    const max = Math.max(...numeric);
+    const scale = max - min || 1;
+    const points = values
+      .map((value, index) => {
+        if (value === null) return null;
+        const x = (index / Math.max(values.length - 1, 1)) * 100;
+        const y = 100 - ((value - min) / scale) * 100;
+        return `${x},${y}`;
+      })
+      .filter((value): value is string => value !== null);
+    if (points.length < 2) return null;
+    return (
+      <svg className="sparkline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <polyline points={points.join(' ')} fill="none" stroke={color} strokeWidth="3.2" />
+      </svg>
+    );
+  };
 
   return (
     <main className="layout">
@@ -1255,6 +1348,14 @@ export default function Page() {
             {isDarkMode ? 'Light mode' : 'Dark mode'}
           </button>
         </div>
+
+        <label>
+          Compare previous period
+          <select value={compareMode} onChange={(event) => setCompareMode(event.target.value as 'previous_period' | 'none')}>
+            <option value="previous_period">Periodo anterior</option>
+            <option value="none">Sin comparación</option>
+          </select>
+        </label>
 
         <label>
           Tipo de fecha
@@ -1379,27 +1480,48 @@ export default function Page() {
           <article className="metricCard">
             <span>ROAS D7</span>
             <strong>{overviewMetrics.roasD7 === null ? 'N/A' : `${(overviewMetrics.roasD7 * 100).toFixed(1)}%`}</strong>
+            <em className={overviewMetrics.deltas.roasD7.deltaPct !== null && overviewMetrics.deltas.roasD7.deltaPct >= 0 ? 'kpiUp' : 'kpiDown'}>
+              {overviewMetrics.deltas.roasD7.deltaPct === null ? 'sin comparación' : `${overviewMetrics.deltas.roasD7.deltaPct >= 0 ? '↑' : '↓'} ${Math.abs(overviewMetrics.deltas.roasD7.deltaPct).toFixed(1)}%`}
+            </em>
+            {renderSparkline(overviewMetrics.trends.roasD7, '#37d1ff')}
           </article>
           <article className="metricCard">
             <span>ROAS D14</span>
             <strong>{overviewMetrics.roasD14 === null ? 'N/A' : `${(overviewMetrics.roasD14 * 100).toFixed(1)}%`}</strong>
+            <em className={overviewMetrics.deltas.roasD14.deltaPct !== null && overviewMetrics.deltas.roasD14.deltaPct >= 0 ? 'kpiUp' : 'kpiDown'}>
+              {overviewMetrics.deltas.roasD14.deltaPct === null ? 'sin comparación' : `${overviewMetrics.deltas.roasD14.deltaPct >= 0 ? '↑' : '↓'} ${Math.abs(overviewMetrics.deltas.roasD14.deltaPct).toFixed(1)}%`}
+            </em>
+            {renderSparkline(overviewMetrics.trends.roasD14, '#63e1b0')}
           </article>
           <article className="metricCard">
             <span>ROAS D30</span>
             <strong>{overviewMetrics.roasD30 === null ? 'N/A' : `${(overviewMetrics.roasD30 * 100).toFixed(1)}%`}</strong>
+            <em className={overviewMetrics.deltas.roasD30.deltaPct !== null && overviewMetrics.deltas.roasD30.deltaPct >= 0 ? 'kpiUp' : 'kpiDown'}>
+              {overviewMetrics.deltas.roasD30.deltaPct === null ? 'sin comparación' : `${overviewMetrics.deltas.roasD30.deltaPct >= 0 ? '↑' : '↓'} ${Math.abs(overviewMetrics.deltas.roasD30.deltaPct).toFixed(1)}%`}
+            </em>
+            {renderSparkline(overviewMetrics.trends.roasD30, '#9d8bff')}
           </article>
           <article className="metricCard">
             <span>Spend total</span>
             <strong>{overviewMetrics.spendTotal.toLocaleString('en-US', { maximumFractionDigits: 2 })}</strong>
+            <em className={overviewMetrics.deltas.spend.deltaPct !== null && overviewMetrics.deltas.spend.deltaPct >= 0 ? 'kpiUp' : 'kpiDown'}>
+              {overviewMetrics.deltas.spend.deltaPct === null ? 'sin comparación' : `${overviewMetrics.deltas.spend.deltaPct >= 0 ? '↑' : '↓'} ${Math.abs(overviewMetrics.deltas.spend.deltaPct).toFixed(1)}%`}
+            </em>
+            {renderSparkline(overviewMetrics.trends.spend, '#b884ff')}
           </article>
           <article className="metricCard">
             <span>CPI</span>
             <strong>{overviewMetrics.cpiAverage === null ? 'N/A' : overviewMetrics.cpiAverage.toFixed(3)}</strong>
+            <em className={overviewMetrics.deltas.cpi.deltaPct !== null && overviewMetrics.deltas.cpi.deltaPct <= 0 ? 'kpiUp' : 'kpiDown'}>
+              {overviewMetrics.deltas.cpi.deltaPct === null ? 'sin comparación' : `${overviewMetrics.deltas.cpi.deltaPct <= 0 ? '↓' : '↑'} ${Math.abs(overviewMetrics.deltas.cpi.deltaPct).toFixed(1)}%`}
+            </em>
+            {renderSparkline(overviewMetrics.trends.cpi, '#f857a6')}
           </article>
           <article className="metricCard">
             <span>Payback Window</span>
             <strong>{overviewMetrics.paybackWindowAverage === null ? 'N/A' : `${Math.round(overviewMetrics.paybackWindowAverage)} días`}</strong>
             <em>{overviewMetrics.recoveredCount > 0 ? `${overviewMetrics.recoveredCount} cohorts recuperados` : 'Sin cohorts recuperados'}</em>
+            {renderSparkline(overviewMetrics.trends.payback, '#5ed37c')}
           </article>
           <article className="metricCard metricCardWide">
             <span>Target ROAS D7 for D180 positive ROI</span>
@@ -1414,7 +1536,7 @@ export default function Page() {
         </p>
         <div className="dualHeatmapGrid">
           <div>
-            <p className="legend">ROAS Heatmap</p>
+            <p className="tableTitle">ROAS Heatmap por Cohort</p>
             <div className="heatmapScroll">
               <table className="heatmap">
                 <thead>
@@ -1467,7 +1589,7 @@ export default function Page() {
 
           <div>
             <div className="ratioHeader">
-              <p className="legend">{secondaryTableMode === 'ltv' ? 'LTV Evolution (Revenue / Installs)' : 'Ratio Evolution Table'}</p>
+              <p className="tableTitle">{secondaryTableMode === 'ltv' ? 'LTV Evolution (Revenue / Installs)' : 'Ratio Evolution Table'}</p>
               <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios')}>
                 <option value="ltv">LTV</option>
                 <option value="ratios">RATIOS</option>
@@ -1560,41 +1682,32 @@ export default function Page() {
               <h3>¿Cómo se calcula la predicción?</h3>
               <ol>
                 <li>
-                  Para cada salto entre cohorts usamos histórico por ventana:
-                  <b>early (hasta D30)=all-time</b>, <b>mid (D30→D90)=~6 meses</b>, <b>late (D90+)=últimas cohorts maduras</b>
-                  (D90→D120=12, D120→D180=12, D180→D360=8).
+                  Tomamos el comportamiento histórico por “etapa” del cohort: <b>temprano</b> (D0→D30), <b>medio</b> (D30→D90) y <b>tardío</b> (D90+).
+                  <div className="simpleHint">Ejemplo simple: para predecir D30, miramos cómo suelen crecer D14→D30 en datos parecidos.</div>
                 </li>
                 <li>
-                  En cada nivel usamos <b>trimmed weighted mean</b> (recorte 10% abajo/arriba) ponderado por spend.
-                  Ejemplo simple: si hay [1.00, 1.02, 1.05, 1.80], el 1.80 extremo pesa menos por recorte.
+                  Calculamos un promedio robusto para no dejarnos llevar por valores extremos.
+                  <div className="simpleHint">Ejemplo: si casi todos crecen ~1.05x y uno solo 1.80x, ese 1.80x no domina la predicción.</div>
                 </li>
                 <li>
-                  Mínimo de muestras: <b>early/mid=6</b>, <b>late=3</b>. Así los saltos tardíos no caen tan rápido a
-                  global por falta de datos.
+                  Pedimos un mínimo de muestras para confiar en una señal: <b>6</b> en etapas temprana/media y <b>3</b> en tardía.
+                  <div className="simpleHint">Traducido: si hay muy pocos casos, preferimos una fuente más estable para no inventar ruido.</div>
                 </li>
                 <li>
-                  No descartamos ratios &lt;1 internamente: se incluyen con <b>clamp [0.85, 1.80]</b> para robustez.
-                  En la tabla visual seguimos mostrando N/A cuando aplica para mantener lectura clara.
+                  Si un salto sale muy raro, lo limitamos a un rango razonable para mantener estabilidad.
+                  <div className="simpleHint">Esto evita picos o caídas irreales cuando hay datos escasos o muy volátiles.</div>
                 </li>
                 <li>
-                  Fallback blended (no hard switch): combina campaña/network/país/global según señal disponible.
-                  Ejemplo: campaña débil ⇒ 40% campaña + 40% network + 20% global.
+                  Usamos <b>fallbacks</b>: primero intentamos campaña, luego red, luego país (si está activo), y finalmente global.
+                  <div className="simpleHint">En pocas palabras: arrancamos por lo más específico y, si no alcanza, vamos a una vista más amplia.</div>
                 </li>
                 <li>
-                  Protección anti-flatline tardío: si un salto late queda ~1.00x pero la evidencia reciente real es mayor,
-                  ajustamos hacia ese valor reciente para evitar planchado artificial.
-                </li>
-                <li>
-                  Cuando falta un ROAS, proyectamos secuencialmente desde el último punto disponible:
-                  <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.
-                </li>
-                <li>
-                  Si faltan pasos intermedios, encadenamos múltiples ratios:
-                  <code>ROAS D120 = D30 × r(D30→D60) × r(D60→D90) × r(D90→D120)</code>.
+                  Cuando falta un ROAS, lo construimos paso a paso desde el último valor real disponible.
+                  <div className="simpleHint">Ejemplo: <code>ROAS D30 = ROAS D14 × ratio(D14→D30)</code>.</div>
                 </li>
               </ol>
 
-              <p className="ratioTitle">Ratios vigentes en esta vista (por etapa + fallback blended):</p>
+              <p className="ratioTitle">Ratios vigentes + fallback usado (según filtros actuales):</p>
               <ul>
                 {(['android', 'ios', 'other'] as const).map((osKey) => {
                   const pairs = Object.entries(ratioSummary[osKey]);
@@ -1606,7 +1719,8 @@ export default function Page() {
                         : pairs
                             .map(([pair, ratio]) => {
                               const [from, to] = pair.split('=>');
-                              return `${normalizeCohortLabel(from)}=>${normalizeCohortLabel(to)}=${ratio.toFixed(3)}`;
+                              const fallback = activeFallbackLabels[osKey][pair] ?? 'global';
+                              return `${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)} = ${ratio.toFixed(3)}x (${fallback})`;
                             })
                             .join(' | ')}
                     </li>
@@ -1631,14 +1745,11 @@ export default function Page() {
 
         <div className="ratioChartCard">
           <div className="ratioHeader">
-            <h3>Ratio Evolution By Date</h3>
-            <button type="button" className="modeBtn" onClick={() => setRatioView((v) => (v === 'table' ? 'chart' : 'table'))}>
-              {ratioView === 'table' ? 'Ver como gráfico' : 'Ver como tabla'}
-            </button>
+            <h3>Evolución de ROAS por Cohort</h3>
           </div>
-          <p className="legend">Cada línea es un jump ratio. Eje X = cohort date. Eje Y = ratio.</p>
+          <p className="legend">Cada línea es un cohort date. Eje X = ventanas (D0..D360). Eje Y = ROAS.</p>
           <div className="ratioToggleWrap">
-            {ratioChartSeries.map((series) => {
+            {evolutionSeries.map((series) => {
               const active = selectedRatioKeys.includes(series.key);
               return (
                 <button
@@ -1658,129 +1769,98 @@ export default function Page() {
             })}
           </div>
 
-          {ratioView === 'chart' ? (
-            <div className="ratioChartWrap">
-              <svg
-                className="ratioChart"
-                viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-                role="img"
-                aria-label="Ratio chart"
-                onMouseMove={handleRatioMouseMove}
-                onMouseLeave={() => setHoveredRatioIndex(null)}
-              >
-                {ratioYTicks.map(({ y }, tick) => (
-                  <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />
-                ))}
-                <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
-                <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
-                <text x={14} y={chartPadding.top + 6} className="axisLabel">Ratio</text>
-                {ratioYTicks.map(({ y, value }) => (
-                  <text key={`ytick-${y}`} x={chartPadding.left - 8} y={y + 4} textAnchor="end" className="axisLabel">
-                    {value.toFixed(2)}x
+          <div className="ratioChartWrap">
+            <svg
+              className="ratioChart"
+              viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+              role="img"
+              aria-label="ROAS evolution chart"
+              onMouseMove={handleRatioMouseMove}
+              onMouseLeave={() => setHoveredRatioIndex(null)}
+            >
+              {ratioYTicks.map(({ y }, tick) => (
+                <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />
+              ))}
+              <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
+              <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
+              <text x={14} y={chartPadding.top + 6} className="axisLabel">ROAS</text>
+              {ratioYTicks.map(({ y, value }) => (
+                <text key={`ytick-${y}`} x={chartPadding.left - 8} y={y + 4} textAnchor="end" className="axisLabel">
+                  {(value * 100).toFixed(0)}%
+                </text>
+              ))}
+
+              {availableCohorts.length > 0 && (
+                <>
+                  <text x={chartPadding.left} y={chartHeight - 8} className="axisLabel">{normalizeCohortLabel(availableCohorts[0])}</text>
+                  <text x={chartPadding.left + plotWidth / 2 - 36} y={chartHeight - 8} className="axisLabel">
+                    {normalizeCohortLabel(availableCohorts[Math.floor((availableCohorts.length - 1) / 2)] ?? '')}
                   </text>
-                ))}
-
-                {ratioEvolutionRows.length > 0 && (
-                  <>
-                    <text x={chartPadding.left} y={chartHeight - 8} className="axisLabel">{ratioEvolutionRows[0].period}</text>
-                    <text x={chartPadding.left + plotWidth / 2 - 36} y={chartHeight - 8} className="axisLabel">
-                      {ratioEvolutionRows[Math.floor((ratioEvolutionRows.length - 1) / 2)]?.period}
-                    </text>
-                    <text x={chartWidth - chartPadding.right - 84} y={chartHeight - 8} className="axisLabel">
-                      {ratioEvolutionRows[ratioEvolutionRows.length - 1]?.period}
-                    </text>
-                  </>
-                )}
-
-                {activeSeries.map((series) => {
-                  type RatioPoint = { x: number; y: number; value: number; period: string; predicted: boolean };
-                  const points = series.values
-                    .map((value, index) => {
-                      if (value === null) return null;
-                      const x = chartPadding.left + (plotWidth * index) / Math.max(ratioEvolutionRows.length - 1, 1);
-                      const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                      return { x, y, value, period: ratioEvolutionRows[index].period, predicted: series.predicted[index] ?? false };
-                    })
-                    .filter((point): point is RatioPoint => point !== null);
-                  const realPoints = points.filter((point) => !point.predicted);
-                  const d = buildLinePath(realPoints.map((point) => ({ x: point.x, y: point.y })));
-                  return (
-                    <g key={`line-${series.key}`}>
-                      <path d={d} stroke={series.color} className="ratioLine" />
-                      {points.map((point) => (
-                        <circle
-                          key={`${series.key}-${point.x}`}
-                          cx={point.x}
-                          cy={point.y}
-                          r={point.predicted ? 3.5 : 4}
-                          fill={point.predicted ? 'transparent' : series.color}
-                          stroke={series.color}
-                          className={point.predicted ? 'ratioPredictedPoint' : 'ratioPoint'}
-                        >
-                          <title>{`${series.label} | ${point.period} | ${point.value.toFixed(3)}x${point.predicted ? ' (pred)' : ''}`}</title>
-                        </circle>
-                      ))}
-                    </g>
-                  );
-                })}
-              </svg>
-
-              {hoveredRatioX !== null && (
-                <div
-                  className="ratioHoverGuide"
-                  style={{ left: `${(hoveredRatioX / chartWidth) * 100}%` }}
-                />
+                  <text x={chartWidth - chartPadding.right - 54} y={chartHeight - 8} className="axisLabel">
+                    {normalizeCohortLabel(availableCohorts[availableCohorts.length - 1] ?? '')}
+                  </text>
+                </>
               )}
 
-              {hoveredRatioDetails && hoveredRatioX !== null && (
-                <div
-                  className="ratioHoverPanel"
-                  style={{ left: `${Math.min(Math.max((hoveredRatioX / chartWidth) * 100 + 2, 2), 66)}%` }}
-                >
-                  <b>Cohort date {hoveredRatioDetails.period}</b>
-                  <ul>
-                    {hoveredRatioDetails.details.length > 0 ? (
-                      hoveredRatioDetails.details.map((entry) => (
-                        <li key={`hover-${entry.label}`}>
-                          <span className="hoverLabel" style={{ color: entry.color }}>{entry.label}</span> = {entry.value.toFixed(3)}x{entry.predicted ? ' (pred)' : ''}
-                        </li>
-                      ))
-                    ) : (
-                      <li>Sin ratios en este punto.</li>
-                    )}
-                  </ul>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="heatmapScroll">
-              <table className="heatmap">
-                <thead>
-                  <tr>
-                    <th>Cohort date</th>
-                    {availableCohorts.slice(0, -1).map((from, index) => {
-                      const to = availableCohorts[index + 1];
-                      return <th key={`ratio-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {ratioEvolutionRows.map((row) => (
-                    <tr key={`ratio-row-${row.period}`}>
-                      <th>{row.period}</th>
-                      {availableCohorts.slice(0, -1).map((from, index) => {
-                        const to = availableCohorts[index + 1];
-                        const key = ratioKey(from, to);
-                        const value = row.ratios[key] ?? null;
-                        const isPredicted = row.predicted[key] ?? false;
-                        return <td key={`ratio-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}</td>;
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+              {activeSeries.map((series) => {
+                type RoasPoint = { x: number; y: number; value: number; cohort: string; predicted: boolean };
+                const points = series.values
+                  .map((value, index) => {
+                    if (value === null) return null;
+                    const x = chartPadding.left + (plotWidth * index) / Math.max(availableCohorts.length - 1, 1);
+                    const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
+                    return { x, y, value, cohort: availableCohorts[index], predicted: series.predicted[index] ?? false };
+                  })
+                  .filter((point): point is RoasPoint => point !== null);
+                const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
+                return (
+                  <g key={`line-${series.key}`}>
+                    <path d={d} stroke={series.color} className="ratioLine roasAnimatedLine" />
+                    {points.map((point) => (
+                      <circle
+                        key={`${series.key}-${point.x}`}
+                        cx={point.x}
+                        cy={point.y}
+                        r={point.predicted ? 3.2 : 4}
+                        fill={point.predicted ? 'transparent' : series.color}
+                        stroke={series.color}
+                        className={point.predicted ? 'ratioPredictedPoint' : 'ratioPoint'}
+                      >
+                        <title>{`${series.label} | ${normalizeCohortLabel(point.cohort)} | ${(point.value * 100).toFixed(1)}%${point.predicted ? ' (pred)' : ''}`}</title>
+                      </circle>
+                    ))}
+                  </g>
+                );
+              })}
+            </svg>
+
+            {hoveredRatioX !== null && (
+              <div
+                className="ratioHoverGuide"
+                style={{ left: `${(hoveredRatioX / chartWidth) * 100}%` }}
+              />
+            )}
+
+            {hoveredRatioDetails && hoveredRatioX !== null && (
+              <div
+                className="ratioHoverPanel"
+                style={{ left: `${Math.min(Math.max((hoveredRatioX / chartWidth) * 100 + 2, 2), 66)}%` }}
+              >
+                <b>{hoveredRatioDetails.cohort}</b>
+                <ul>
+                  {hoveredRatioDetails.details.length > 0 ? (
+                    hoveredRatioDetails.details.map((entry) => (
+                      <li key={`hover-${entry.label}`}>
+                        <span className="hoverLabel" style={{ color: entry.color }}>{entry.label}</span> = {(entry.value * 100).toFixed(1)}%{entry.predicted ? ' (pred)' : ''}
+                      </li>
+                    ))
+                  ) : (
+                    <li>Sin datos en este punto.</li>
+                  )}
+                </ul>
+              </div>
+            )}
+          </div>
         </div>
       </section>
     </main>
