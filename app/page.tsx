@@ -18,6 +18,7 @@ type DataRow = {
   payingUsers: number;
   cost: number;
   revenueByCohort: Record<string, number>;
+  retentionByCohort: Record<string, number>;
 };
 
 type HeatmapOrderBy = 'cohort_date' | 'os' | 'country' | 'network' | 'campaign';
@@ -114,14 +115,20 @@ function formatCohort(cohortKey: string): string {
 }
 
 function normalizeCohortLabel(cohortKey: string): string {
-  const raw = cohortKey.replace('all_revenue_total_', '').toUpperCase();
+  const raw = cohortKey
+    .replace('all_revenue_total_', '')
+    .replace('retention_rate_', '')
+    .toUpperCase();
   if (raw === 'M6') return 'D180';
   if (raw === 'M12') return 'D360';
   return raw;
 }
 
 function cohortSortValue(cohortKey: string): number {
-  const raw = cohortKey.replace('all_revenue_total_', '').toLowerCase();
+  const raw = cohortKey
+    .replace('all_revenue_total_', '')
+    .replace('retention_rate_', '')
+    .toLowerCase();
   if (raw.startsWith('d')) {
     const day = Number(raw.slice(1));
     return Number.isFinite(day) ? day : Number.MAX_SAFE_INTEGER - 1;
@@ -134,7 +141,10 @@ function cohortSortValue(cohortKey: string): number {
 }
 
 function cohortWindowDays(cohortKey: string): number {
-  const raw = cohortKey.replace('all_revenue_total_', '').toLowerCase();
+  const raw = cohortKey
+    .replace('all_revenue_total_', '')
+    .replace('retention_rate_', '')
+    .toLowerCase();
   if (raw.startsWith('d')) {
     const day = Number(raw.slice(1));
     return Number.isFinite(day) ? day : 0;
@@ -412,6 +422,7 @@ function MultiSelect({
 export default function Page() {
   const [rows, setRows] = useState<DataRow[]>([]);
   const [availableCohorts, setAvailableCohorts] = useState<string[]>([]);
+  const [availableRetentionCohorts, setAvailableRetentionCohorts] = useState<string[]>([]);
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -430,7 +441,7 @@ export default function Page() {
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
   const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('last_3_months');
-  const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios'>('ltv');
+  const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios' | 'retained'>('ltv');
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -440,6 +451,9 @@ export default function Page() {
     const fields = result.meta.fields ?? [];
     const cohorts = fields
       .filter((field) => field.startsWith('all_revenue_total_'))
+      .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
+    const retentionCohorts = fields
+      .filter((field) => field.startsWith('retention_rate_'))
       .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
 
     const parsed = result.data
@@ -453,6 +467,11 @@ export default function Page() {
         const revenueByCohort: Record<string, number> = {};
         cohorts.forEach((cohort) => {
           revenueByCohort[cohort] = parseNumber(row[cohort]);
+        });
+        const retentionByCohort: Record<string, number> = {};
+        retentionCohorts.forEach((cohort) => {
+          const rawValue = parseOptionalNumber(row[cohort]);
+          retentionByCohort[cohort] = rawValue > 1 ? rawValue / 100 : rawValue;
         });
 
         return {
@@ -470,7 +489,8 @@ export default function Page() {
               row['paying users']
           ),
           cost: parseNumber(row.cost),
-          revenueByCohort
+          revenueByCohort,
+          retentionByCohort
         } satisfies DataRow;
       })
       .filter((row): row is DataRow => row !== null)
@@ -478,6 +498,7 @@ export default function Page() {
 
     setRows(parsed);
     setAvailableCohorts(cohorts);
+    setAvailableRetentionCohorts(retentionCohorts);
     setDataSourceLabel(label);
     setLoadError(null);
 
@@ -1050,6 +1071,98 @@ export default function Page() {
     return out;
   }, [orderedPeriods, availableCohorts, predictedRoas, periodCpi]);
 
+  const retainedUsersData = useMemo(() => {
+    const periodRetentionActual = new Map<string, number | null>();
+    const periodRetentionResolved = new Map<string, number | null>();
+    const periodRetentionPredictedMask = new Map<string, boolean>();
+    const periodRetainedUsers = new Map<string, number | null>();
+    const periodRevenueLeft = new Map<string, number>();
+
+    const globalAcc: Record<string, { weighted: number; installs: number }> = {};
+    const osAcc: Record<string, Record<string, { weighted: number; installs: number }>> = { android: {}, ios: {}, other: {} };
+    const countryAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
+    const periodAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
+    const periodCountryCost: Record<string, Record<string, number>> = {};
+    const periodOsCost: Record<string, Record<string, number>> = {};
+
+    const addSample = (target: Record<string, { weighted: number; installs: number }>, cohort: string, rate: number, installs: number) => {
+      const current = target[cohort] ?? { weighted: 0, installs: 0 };
+      current.weighted += rate * installs;
+      current.installs += installs;
+      target[cohort] = current;
+    };
+
+    for (const row of heatmapRows) {
+      const period = periodKey(row.day, granularity);
+      periodAcc[period] = periodAcc[period] ?? {};
+      periodCountryCost[period] = periodCountryCost[period] ?? {};
+      periodOsCost[period] = periodOsCost[period] ?? {};
+      periodCountryCost[period][row.country] = (periodCountryCost[period][row.country] ?? 0) + row.cost;
+      periodOsCost[period][row.os] = (periodOsCost[period][row.os] ?? 0) + row.cost;
+      countryAcc[row.country] = countryAcc[row.country] ?? {};
+
+      for (const cohort of availableRetentionCohorts) {
+        const value = row.retentionByCohort[cohort];
+        if (!Number.isFinite(value) || value <= 0 || row.installs <= 0) continue;
+        addSample(globalAcc, cohort, value, row.installs);
+        addSample(periodAcc[period], cohort, value, row.installs);
+        addSample(osAcc[row.os], cohort, value, row.installs);
+        addSample(countryAcc[row.country], cohort, value, row.installs);
+      }
+    }
+
+    const average = (bucket?: { weighted: number; installs: number }): number | null =>
+      !bucket || bucket.installs <= 0 ? null : bucket.weighted / bucket.installs;
+
+    for (const period of orderedPeriods) {
+      const installs = periodInstalls.get(period) ?? 0;
+      const topOs = Object.entries(periodOsCost[period] ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
+      const topCountry = Object.entries(periodCountryCost[period] ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+      for (const cohort of availableRetentionCohorts) {
+        const key = `${period}|||${cohort}`;
+        const actual = average(periodAcc[period]?.[cohort]);
+        periodRetentionActual.set(key, actual);
+        if (actual !== null) {
+          periodRetentionResolved.set(key, actual);
+          periodRetentionPredictedMask.set(key, false);
+          periodRetainedUsers.set(key, installs > 0 ? actual * installs : null);
+          continue;
+        }
+        const fallback = enablePrediction
+          ? average(osAcc[topOs]?.[cohort]) ??
+            (enableCountryFallback && topCountry ? average(countryAcc[topCountry]?.[cohort]) : null) ??
+            average(globalAcc[cohort])
+          : null;
+        periodRetentionResolved.set(key, fallback);
+        periodRetentionPredictedMask.set(key, fallback !== null);
+        periodRetainedUsers.set(key, fallback !== null && installs > 0 ? fallback * installs : null);
+      }
+
+      const bestRoas = availableCohorts.reduce((max, cohort) => {
+        const key = `${period}|||${cohort}`;
+        const value = enablePrediction ? predictedRoas.get(key) ?? null : periodRoas.get(key) ?? null;
+        return value !== null && value > max ? value : max;
+      }, 0);
+      const recoveredRevenue = (periodCost.get(period) ?? 0) * bestRoas;
+      periodRevenueLeft.set(period, Math.max((periodCost.get(period) ?? 0) - recoveredRevenue, 0));
+    }
+
+    return { periodRetentionActual, periodRetentionResolved, periodRetentionPredictedMask, periodRetainedUsers, periodRevenueLeft };
+  }, [
+    heatmapRows,
+    granularity,
+    availableRetentionCohorts,
+    orderedPeriods,
+    periodInstalls,
+    enablePrediction,
+    enableCountryFallback,
+    periodRoas,
+    predictedRoas,
+    availableCohorts,
+    periodCost
+  ]);
+
   const ratioEvolutionRows = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
     const maxAvailableDay = heatmapRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
@@ -1598,10 +1711,17 @@ export default function Page() {
 
           <div>
             <div className="ratioHeader">
-              <p className="tableTitle">{secondaryTableMode === 'ltv' ? 'LTV Evolution (Revenue / Installs)' : 'Ratio Evolution Table'}</p>
-              <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios')}>
+              <p className="tableTitle">
+                {secondaryTableMode === 'ltv'
+                  ? 'LTV Evolution (Revenue / Installs)'
+                  : secondaryTableMode === 'ratios'
+                    ? 'Ratio Evolution Table'
+                    : 'Usuarios retenidos por cohort'}
+              </p>
+              <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios' | 'retained')}>
                 <option value="ltv">LTV</option>
                 <option value="ratios">RATIOS</option>
+                <option value="retained">USUARIOS RETENIDOS</option>
               </select>
             </div>
             {secondaryTableMode === 'ltv' ? (
@@ -1648,7 +1768,7 @@ export default function Page() {
                   </tbody>
                 </table>
               </div>
-            ) : (
+            ) : secondaryTableMode === 'ratios' ? (
               <div className="heatmapScroll">
                 <table className="heatmap">
                   <thead>
@@ -1671,6 +1791,40 @@ export default function Page() {
                           const isPredicted = row.predicted[key] ?? false;
                           return <td key={`ratio-secondary-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}</td>;
                         })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="heatmapScroll">
+                <table className="heatmap">
+                  <thead>
+                    <tr>
+                      <th>{heatmapRowLabel}</th>
+                      <th>Installs</th>
+                      {availableRetentionCohorts.map((cohort) => (
+                        <th key={`retained-${cohort}`}>{`Retenidos ${normalizeCohortLabel(cohort)}`}</th>
+                      ))}
+                      <th>Revenue left</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderedPeriods.map((period) => (
+                      <tr key={`retained-row-${period}`}>
+                        <th>{period}</th>
+                        <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                        {availableRetentionCohorts.map((cohort) => {
+                          const key = `${period}|||${cohort}`;
+                          const value = retainedUsersData.periodRetainedUsers.get(key) ?? null;
+                          const isFallback = enablePrediction ? retainedUsersData.periodRetentionPredictedMask.get(key) ?? false : false;
+                          return (
+                            <td key={`retained-${period}-${cohort}`} className={isFallback ? 'predictedCell' : undefined}>
+                              {value === null ? 'N/A' : `${isFallback ? '★ ' : ''}${Math.round(value).toLocaleString('en-US')}`}
+                            </td>
+                          );
+                        })}
+                        <td>{(retainedUsersData.periodRevenueLeft.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1750,6 +1904,31 @@ export default function Page() {
               )}
             </div>
           </>
+        )}
+
+        {secondaryTableMode === 'retained' && (
+          <div className="predictionExplain">
+            <h3>¿Cómo calculamos “usuarios retenidos” y “revenue left”?</h3>
+            <ol>
+              <li>
+                Para cada cohort (D1, D3, D14, etc.) tomamos la retención real promedio ponderada por installs.
+                <div className="simpleHint">Más installs = más peso, así evitamos que un cohort chico distorsione el resultado.</div>
+              </li>
+              <li>
+                Convertimos la retención en usuarios netos: <code>Retenidos netos = installs del período × retención</code>.
+                <div className="simpleHint">Ejemplo: 10,000 installs con retención D3 de 0.12 ⇒ 1,200 usuarios retenidos D3.</div>
+              </li>
+              <li>
+                Si falta data y activás <b>Enable prediction</b>, no inventamos un modelo nuevo: usamos fallback de promedio real
+                (OS → país → global) y lo marcamos con ★.
+                <div className="simpleHint">Es una imputación basada en retención observada real, no una predicción “caja negra”.</div>
+              </li>
+              <li>
+                <b>Revenue left</b> es cuánto falta recuperar para break-even: <code>max(0, cost - revenue recuperado)</code>.
+                <div className="simpleHint">Si ya superó costo, revenue left queda en 0.</div>
+              </li>
+            </ol>
+          </div>
         )}
 
         <div className="ratioChartCard">
