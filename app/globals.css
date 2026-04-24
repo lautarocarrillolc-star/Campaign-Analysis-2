@@ -48,10 +48,6 @@ body {
   flex-direction: column;
   gap: 14px;
   transition: background 260ms ease, border-color 260ms ease;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
 }
 
 .brandBlock h1 {
@@ -389,8 +385,6 @@ input {
   padding: 12px;
   margin-bottom: 12px;
   background: var(--panel);
-  width: min(50vw, 1200px);
-  min-width: 760px;
 }
 
 .ratioChartCard h3 {
@@ -469,8 +463,7 @@ input {
 
 .axisLabel {
   fill: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
 }
 
 .ratioLine {
@@ -562,16 +555,8 @@ input {
   }
 
   .filters {
-    position: static;
-    height: auto;
-    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--border);
-  }
-
-  .ratioChartCard {
-    width: 100%;
-    min-width: 0;
   }
 }
 
@@ -580,4 +565,3 @@ input {
     stroke-dashoffset: 0;
   }
 }
-
