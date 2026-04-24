@@ -643,6 +643,15 @@ export default function Page() {
     return scopedRows.filter((row) => row.day.getTime() >= startMs && row.day.getTime() <= endMs);
   }, [scopedRows, quickDatePreset, fromDate, toDate]);
 
+  const organicRetentionRows = useMemo(() => {
+    return filteredByDate.filter(
+      (row) =>
+        matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.country, selectedCountries) &&
+        /organic/i.test(`${row.network} ${row.campaign}`)
+    );
+  }, [filteredByDate, selectedOs, selectedCountries]);
+
   const { orderedPeriods, periodCost, periodInstalls, periodCpi, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, periodJumpRatios, ratioDebugInfo, maxRoas, maturityDiagnostics } = useMemo(() => {
     const RATIO_PREDICTION_CONFIG = {
       trimPercent: 0.1,
@@ -1081,6 +1090,7 @@ export default function Page() {
     const globalAcc: Record<string, { weighted: number; installs: number }> = {};
     const osAcc: Record<string, Record<string, { weighted: number; installs: number }>> = { android: {}, ios: {}, other: {} };
     const countryAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
+    const organicCountryAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
     const periodAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
     const periodCountryCost: Record<string, Record<string, number>> = {};
     const periodOsCost: Record<string, Record<string, number>> = {};
@@ -1111,6 +1121,15 @@ export default function Page() {
       }
     }
 
+    for (const row of organicRetentionRows) {
+      organicCountryAcc[row.country] = organicCountryAcc[row.country] ?? {};
+      for (const cohort of availableRetentionCohorts) {
+        const value = row.retentionByCohort[cohort];
+        if (!Number.isFinite(value) || value <= 0 || row.installs <= 0) continue;
+        addSample(organicCountryAcc[row.country], cohort, value, row.installs);
+      }
+    }
+
     const average = (bucket?: { weighted: number; installs: number }): number | null =>
       !bucket || bucket.installs <= 0 ? null : bucket.weighted / bucket.installs;
 
@@ -1118,6 +1137,7 @@ export default function Page() {
       const installs = periodInstalls.get(period) ?? 0;
       const topOs = Object.entries(periodOsCost[period] ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
       const topCountry = Object.entries(periodCountryCost[period] ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+      const periodCountries = Object.keys(periodCountryCost[period] ?? {});
 
       for (const cohort of availableRetentionCohorts) {
         const key = `${period}|||${cohort}`;
@@ -1129,8 +1149,23 @@ export default function Page() {
           periodRetainedUsers.set(key, installs > 0 ? actual * installs : null);
           continue;
         }
+        const organicCountryFallback = periodCountries.length > 0
+          ? periodCountries.reduce(
+              (acc, country) => {
+                const avg = average(organicCountryAcc[country]?.[cohort]);
+                if (avg === null) return acc;
+                const weight = (periodCountryCost[period]?.[country] ?? 0) || 1;
+                return { weighted: acc.weighted + avg * weight, weight: acc.weight + weight };
+              },
+              { weighted: 0, weight: 0 }
+            )
+          : { weighted: 0, weight: 0 };
+        const organicResolved =
+          organicCountryFallback.weight > 0 ? organicCountryFallback.weighted / organicCountryFallback.weight : null;
+
         const fallback = enablePrediction
-          ? average(osAcc[topOs]?.[cohort]) ??
+          ? organicResolved ??
+            average(osAcc[topOs]?.[cohort]) ??
             (enableCountryFallback && topCountry ? average(countryAcc[topCountry]?.[cohort]) : null) ??
             average(globalAcc[cohort])
           : null;
@@ -1160,7 +1195,8 @@ export default function Page() {
     periodRoas,
     predictedRoas,
     availableCohorts,
-    periodCost
+    periodCost,
+    organicRetentionRows
   ]);
 
   const ratioEvolutionRows = useMemo(() => {
@@ -1919,9 +1955,9 @@ export default function Page() {
                 <div className="simpleHint">Ejemplo: 10,000 installs con retención D3 de 0.12 ⇒ 1,200 usuarios retenidos D3.</div>
               </li>
               <li>
-                Si falta data y activás <b>Enable prediction</b>, no inventamos un modelo nuevo: usamos fallback de promedio real
-                (OS → país → global) y lo marcamos con ★.
-                <div className="simpleHint">Es una imputación basada en retención observada real, no una predicción “caja negra”.</div>
+                Si falta data y activás <b>Enable prediction</b>, primero buscamos retención <b>orgánica real</b> del país (o países) de esa campaña para esa ventana (ej: D60).
+                Si no existe, recién ahí caemos a fallback OS → país → global, y lo marcamos con ★.
+                <div className="simpleHint">Es una imputación con retención observada real (priorizando orgánico por país), no una predicción “caja negra”.</div>
               </li>
               <li>
                 <b>Revenue left</b> es cuánto falta recuperar para break-even: <code>max(0, cost - revenue recuperado)</code>.
@@ -2051,4 +2087,3 @@ export default function Page() {
     </main>
   );
 }
-
