@@ -54,6 +54,7 @@ body {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: #9aa8c7 #0b1430;
 }
@@ -161,20 +162,22 @@ input {
 
 .multiSelect {
   border: 1px solid var(--border-soft);
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--panel-2) 86%, #060d1f 14%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .multiSelect summary {
   list-style: none;
   cursor: pointer;
-  padding: 12px 12px;
+  padding: 14px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: 14px;
   font-weight: 600;
+  min-height: 48px;
 }
 
 .multiSelect summary::-webkit-details-marker {
@@ -189,12 +192,29 @@ input {
 
 .multiSelectList {
   border-top: 1px solid var(--border);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 320px;
+  gap: 9px;
+  max-height: 280px;
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #9aa8c7 #101a33;
+}
+
+.multiSelectList::-webkit-scrollbar {
+  width: 8px;
+}
+
+.multiSelectList::-webkit-scrollbar-track {
+  background: #101a33;
+  border-radius: 999px;
+}
+
+.multiSelectList::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #cdd8ee 0%, #97a6c6 100%);
+  border-radius: 999px;
+  border: 1px solid #101a33;
 }
 
 .searchInput {
@@ -206,17 +226,19 @@ input {
   position: sticky;
   top: 0;
   z-index: 3;
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 92%, #0b1328 8%);
+  margin-bottom: 4px;
 }
 
 .optionRow {
   display: flex;
   flex-direction: row;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
   font-size: 14px;
   font-weight: 500;
-  min-height: 28px;
+  min-height: 34px;
+  padding: 1px 0;
 }
 
 .clearBtn {
