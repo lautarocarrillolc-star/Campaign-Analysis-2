@@ -412,7 +412,7 @@ function MultiSelect({
 export default function Page() {
   const [rows, setRows] = useState<DataRow[]>([]);
   const [availableCohorts, setAvailableCohorts] = useState<string[]>([]);
-  const [granularity, setGranularity] = useState<Granularity>('weekly');
+  const [granularity, setGranularity] = useState<Granularity>('daily');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selectedOs, setSelectedOs] = useState<string[]>([]);
@@ -429,7 +429,7 @@ export default function Page() {
   const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
-  const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('last_3_months');
+  const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('all_time');
   const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios'>('ltv');
 
   useEffect(() => {
@@ -1122,9 +1122,9 @@ export default function Page() {
     (globalThis as Record<string, unknown>).__ratioDebug = ratioDebugInfo;
   }, [ratioDebugInfo]);
 
-  const chartWidth = 1180;
-  const chartHeight = 420;
-  const chartPadding = { top: 24, right: 24, bottom: 62, left: 58 };
+  const chartWidth = 980;
+  const chartHeight = 300;
+  const chartPadding = { top: 20, right: 16, bottom: 30, left: 44 };
   const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
   const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
   const activeSeries = evolutionSeries.filter((series) => selectedRatioKeys.includes(series.key));
@@ -1132,9 +1132,9 @@ export default function Page() {
     1,
     ...activeSeries.flatMap((series) => series.values.filter((value): value is number => value !== null))
   );
-  const ratioYTicks = [0, 1, 2, 3, 4, 5].map((tick) => ({
-    y: chartPadding.top + (plotHeight * tick) / 5,
-    value: maxRatioValue * (1 - tick / 5)
+  const ratioYTicks = [0, 1, 2, 3, 4].map((tick) => ({
+    y: chartPadding.top + (plotHeight * tick) / 4,
+    value: maxRatioValue * (1 - tick / 4)
   }));
   const hoveredRatioDetails = useMemo(() => {
     if (hoveredRatioIndex === null) return null;
@@ -1299,27 +1299,10 @@ export default function Page() {
     if (availableCohorts.length === 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointerX = event.clientX - bounds.left;
-    const pointerY = event.clientY - bounds.top;
     const relativeX = (pointerX / bounds.width) * chartWidth;
-    const relativeY = (pointerY / bounds.height) * chartHeight;
-    const isInsidePlot =
-      relativeX >= chartPadding.left &&
-      relativeX <= chartWidth - chartPadding.right &&
-      relativeY >= chartPadding.top &&
-      relativeY <= chartPadding.top + plotHeight;
-    if (!isInsidePlot) {
-      setHoveredRatioIndex(null);
-      return;
-    }
     const clampedX = Math.min(Math.max(relativeX, chartPadding.left), chartWidth - chartPadding.right);
     const ratio = (clampedX - chartPadding.left) / Math.max(plotWidth, 1);
     const nextIndex = Math.round(ratio * Math.max(availableCohorts.length - 1, 0));
-    const pointX = chartPadding.left + (plotWidth * nextIndex) / Math.max(availableCohorts.length - 1, 1);
-    const hoverTolerance = Math.max(16, plotWidth / Math.max((availableCohorts.length - 1) * 3, 1));
-    if (Math.abs(clampedX - pointX) > hoverTolerance) {
-      setHoveredRatioIndex(null);
-      return;
-    }
     setHoveredRatioIndex(nextIndex);
   }
 
@@ -1708,7 +1691,7 @@ export default function Page() {
                 </li>
                 <li>
                   Pedimos un mínimo de muestras para confiar en una señal: <b>6</b> en etapas temprana/media y <b>3</b> en tardía.
-                  <div className="simpleHint">Es decir: temprana/media cubre de D0 a D90 (donde pedimos más evidencia), y tardía es de D90 en adelante (acepta menos casos porque hay menos cohorts maduras). Esto evita tomar decisiones con datos débiles.</div>
+                  <div className="simpleHint">Traducido: si hay muy pocos casos, preferimos una fuente más estable para no inventar ruido.</div>
                 </li>
                 <li>
                   Si un salto sale muy raro, lo limitamos a un rango razonable para mantener estabilidad.
@@ -1807,14 +1790,17 @@ export default function Page() {
                 </text>
               ))}
 
-              {availableCohorts.map((cohort, index) => {
-                const x = chartPadding.left + (plotWidth * index) / Math.max(availableCohorts.length - 1, 1);
-                return (
-                  <text key={`xtick-${cohort}`} x={x} y={chartHeight - 18} textAnchor="middle" className="axisLabel">
-                    {normalizeCohortLabel(cohort)}
+              {availableCohorts.length > 0 && (
+                <>
+                  <text x={chartPadding.left} y={chartHeight - 8} className="axisLabel">{normalizeCohortLabel(availableCohorts[0])}</text>
+                  <text x={chartPadding.left + plotWidth / 2 - 36} y={chartHeight - 8} className="axisLabel">
+                    {normalizeCohortLabel(availableCohorts[Math.floor((availableCohorts.length - 1) / 2)] ?? '')}
                   </text>
-                );
-              })}
+                  <text x={chartWidth - chartPadding.right - 54} y={chartHeight - 8} className="axisLabel">
+                    {normalizeCohortLabel(availableCohorts[availableCohorts.length - 1] ?? '')}
+                  </text>
+                </>
+              )}
 
               {activeSeries.map((series) => {
                 type RoasPoint = { x: number; y: number; value: number; cohort: string; predicted: boolean };
@@ -1880,4 +1866,3 @@ export default function Page() {
     </main>
   );
 }
-
