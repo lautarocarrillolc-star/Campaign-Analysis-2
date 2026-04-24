@@ -36,8 +36,10 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 310px 1fr;
+  grid-template-columns: 360px minmax(0, 1fr);
   min-height: 100vh;
+  max-width: 2400px;
+  margin: 0 auto;
 }
 
 .filters {
@@ -149,8 +151,8 @@ select,
 input {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
-  min-height: 38px;
-  padding: 7px 10px;
+  min-height: 42px;
+  padding: 9px 11px;
   font-size: 14px;
   background: var(--panel-2);
   color: var(--text);
@@ -167,7 +169,7 @@ input {
 .multiSelect summary {
   list-style: none;
   cursor: pointer;
-  padding: 10px 12px;
+  padding: 12px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -191,16 +193,16 @@ input {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 190px;
+  max-height: 320px;
   overflow: auto;
 }
 
 .searchInput {
   border: 1px solid var(--border-soft);
   border-radius: 6px;
-  min-height: 32px;
-  padding: 6px 8px;
-  font-size: 12px;
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 13px;
   position: sticky;
   top: 0;
   z-index: 3;
@@ -212,8 +214,9 @@ input {
   flex-direction: row;
   gap: 8px;
   align-items: center;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
+  min-height: 28px;
 }
 
 .clearBtn {
@@ -233,7 +236,7 @@ input {
 }
 
 .heatmapWrap {
-  padding: 18px 20px;
+  padding: 18px 26px;
 }
 
 .overviewHero h2 {
@@ -406,8 +409,8 @@ input {
   padding: 12px;
   margin-bottom: 12px;
   background: var(--panel);
-  width: min(50vw, 1200px);
-  min-width: 760px;
+  width: min(72vw, 1700px);
+  min-width: 880px;
 }
 
 .ratioChartCard h3 {
@@ -589,6 +592,37 @@ input {
   .ratioChartCard {
     width: 100%;
     min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .filters {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .brandBlock h1 {
+    font-size: 24px;
+  }
+
+  .heatmapWrap {
+    padding: 12px;
+  }
+
+  .metricsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .metricCardWide {
+    grid-column: span 1;
+  }
+
+  .multiSelectList {
+    max-height: 260px;
+  }
+
+  .tableTitle {
+    font-size: 18px;
   }
 }
 
