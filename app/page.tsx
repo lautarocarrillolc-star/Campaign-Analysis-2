@@ -1314,6 +1314,12 @@ export default function Page() {
     const clampedX = Math.min(Math.max(relativeX, chartPadding.left), chartWidth - chartPadding.right);
     const ratio = (clampedX - chartPadding.left) / Math.max(plotWidth, 1);
     const nextIndex = Math.round(ratio * Math.max(availableCohorts.length - 1, 0));
+    const pointX = chartPadding.left + (plotWidth * nextIndex) / Math.max(availableCohorts.length - 1, 1);
+    const hoverTolerance = Math.max(16, plotWidth / Math.max((availableCohorts.length - 1) * 3, 1));
+    if (Math.abs(clampedX - pointX) > hoverTolerance) {
+      setHoveredRatioIndex(null);
+      return;
+    }
     setHoveredRatioIndex(nextIndex);
   }
 
@@ -1483,41 +1489,6 @@ export default function Page() {
             el selector.
           </p>
         )}
-        <div className="filterSlider">
-          <label>
-            Compare
-            <select value={compareMode} onChange={(event) => setCompareMode(event.target.value as 'previous_period' | 'none')}>
-              <option value="previous_period">Periodo anterior</option>
-              <option value="none">Sin comparación</option>
-            </select>
-          </label>
-          <label>
-            Tipo fecha
-            <select value={granularity} onChange={(event) => setGranularity(event.target.value as Granularity)}>
-              <option value="daily">Diario</option>
-              <option value="weekly">Semanal</option>
-              <option value="monthly">Mensual</option>
-            </select>
-          </label>
-          <label>
-            Rango rápido
-            <select value={quickDatePreset} onChange={(event) => setQuickDatePreset(event.target.value as QuickDatePreset)}>
-              <option value="last_3_months">Last 3 months</option>
-              <option value="last_2_months">Last 2 months</option>
-              <option value="last_month">Last month</option>
-              <option value="last_30_days">Last 30 days</option>
-              <option value="all_time">All time</option>
-            </select>
-          </label>
-          <label className="toggleInline">
-            <input type="checkbox" checked={maturedOnly} onChange={(event) => setMaturedOnly(event.target.checked)} />
-            <span>Matured only</span>
-          </label>
-          <label className="toggleInline">
-            <input type="checkbox" checked={enablePrediction} onChange={(event) => setEnablePrediction(event.target.checked)} />
-            <span>Prediction</span>
-          </label>
-        </div>
         <div className="overviewHero">
           <h2>Vista General</h2>
           <p>Rendimiento agregado de campañas y cohorts</p>
@@ -1737,7 +1708,7 @@ export default function Page() {
                 </li>
                 <li>
                   Pedimos un mínimo de muestras para confiar en una señal: <b>6</b> en etapas temprana/media y <b>3</b> en tardía.
-                  <div className="simpleHint">Traducido: si hay muy pocos casos, preferimos una fuente más estable para no inventar ruido.</div>
+                  <div className="simpleHint">Es decir: temprana/media cubre de D0 a D90 (donde pedimos más evidencia), y tardía es de D90 en adelante (acepta menos casos porque hay menos cohorts maduras). Esto evita tomar decisiones con datos débiles.</div>
                 </li>
                 <li>
                   Si un salto sale muy raro, lo limitamos a un rango razonable para mantener estabilidad.
@@ -1909,3 +1880,4 @@ export default function Page() {
     </main>
   );
 }
+
