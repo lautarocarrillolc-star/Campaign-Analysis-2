@@ -1310,7 +1310,7 @@ export default function Page() {
                   {orderedPeriods.map((period) => (
                     (() => {
                       const rowValues = availableCohorts
-                        .map((cohort) => periodRoas.get(`${period}|||${cohort}`) ?? null)
+                        .map((cohort) => (enablePrediction ? predictedRoas.get(`${period}|||${cohort}`) : periodRoas.get(`${period}|||${cohort}`)) ?? null)
                         .filter((value): value is number => value !== null);
                       const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : maxRoas;
                       return (
@@ -1320,10 +1320,17 @@ export default function Page() {
                           <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
                           <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
                           {availableCohorts.map((cohort) => {
-                            const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
+                            const cellKey = `${period}|||${cohort}`;
+                            const value = enablePrediction ? predictedRoas.get(cellKey) ?? null : periodRoas.get(cellKey) ?? null;
+                            const isPredicted = enablePrediction ? predictedMask.get(cellKey) ?? false : false;
                             return (
-                              <td key={`${period}-${cohort}`} style={heatmapStyle(value, rowMax, isDarkMode)}>
-                                {value === null ? '∞ / N/A' : `${(value * 100).toFixed(1)}%`}
+                              <td
+                                key={`${period}-${cohort}`}
+                                className={isPredicted ? 'predictedCell' : undefined}
+                                style={heatmapStyle(value, rowMax, isDarkMode)}
+                                title={isPredicted ? 'Predicted value' : 'Actual value'}
+                              >
+                                {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
                               </td>
                             );
                           })}
@@ -1385,57 +1392,9 @@ export default function Page() {
         {enablePrediction && (
           <>
             <p className="legend">
-              Heatmap con predicción: usa valores reales cuando existen y completa faltantes de forma secuencial por
-              ratios de progresión (segmentado por OS). Las predicciones tienen * y borde punteado.
+              Predicción activa en el mismo ROAS Heatmap: se completan faltantes en la tabla principal con * y borde
+              punteado.
             </p>
-            <div className="heatmapScroll">
-              <table className="heatmap">
-                <thead>
-                  <tr>
-                    <th>{heatmapRowLabel}</th>
-                    <th>Ad spend</th>
-                    <th>Installs</th>
-                    <th>CPI</th>
-                    {availableCohorts.map((cohort) => (
-                      <th key={`pred-${cohort}`}>{formatCohort(cohort)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {orderedPeriods.map((period) => (
-                    (() => {
-                      const rowValues = availableCohorts
-                        .map((cohort) => predictedRoas.get(`${period}|||${cohort}`) ?? null)
-                        .filter((value): value is number => value !== null);
-                      const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : maxRoas;
-                      return (
-                        <tr key={`pred-${period}`}>
-                          <th>{period}</th>
-                          <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
-                          <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                          <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
-                          {availableCohorts.map((cohort) => {
-                            const cellKey = `${period}|||${cohort}`;
-                            const value = predictedRoas.get(cellKey) ?? null;
-                            const isPredicted = predictedMask.get(cellKey) ?? false;
-                            return (
-                              <td
-                                key={`pred-${period}-${cohort}`}
-                                className={isPredicted ? 'predictedCell' : undefined}
-                                style={heatmapStyle(value, rowMax, isDarkMode)}
-                                title={isPredicted ? 'Predicted value' : 'Actual value'}
-                              >
-                                {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${(value * 100).toFixed(1)}%${isPredicted ? '*' : ''}`}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })()
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
             <div className="predictionExplain">
               <h3>¿Cómo se calcula la predicción?</h3>
@@ -1667,4 +1626,3 @@ export default function Page() {
     </main>
   );
 }
-
