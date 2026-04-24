@@ -1163,6 +1163,67 @@ export default function Page() {
             ? 'Network'
             : 'Campaign';
 
+  const overviewMetrics = useMemo(() => {
+    const cohortByDay = (targetDay: number) => availableCohorts.find((cohort) => cohortWindowDays(cohort) === targetDay) ?? null;
+    const cohortD7 = cohortByDay(7);
+    const cohortD14 = cohortByDay(14);
+    const cohortD30 = cohortByDay(30);
+    const cohortD180 = cohortByDay(180);
+    const roasAverageFor = (cohort: string | null): number | null => {
+      if (!cohort) return null;
+      const values = orderedPeriods
+        .map((period) => periodRoas.get(`${period}|||${cohort}`) ?? null)
+        .filter((value): value is number => value !== null);
+      if (values.length === 0) return null;
+      return values.reduce((sum, value) => sum + value, 0) / values.length;
+    };
+
+    const spendTotal = orderedPeriods.reduce((sum, period) => sum + (periodCost.get(period) ?? 0), 0);
+    const installsTotal = orderedPeriods.reduce((sum, period) => sum + (periodInstalls.get(period) ?? 0), 0);
+    const cpiAverage = installsTotal > 0 ? spendTotal / installsTotal : null;
+    const roasD7 = roasAverageFor(cohortD7);
+    const roasD14 = roasAverageFor(cohortD14);
+    const roasD30 = roasAverageFor(cohortD30);
+
+    const recoveredPeriods = cohortD180
+      ? orderedPeriods.filter((period) => {
+          const roas180 = periodRoas.get(`${period}|||${cohortD180}`) ?? null;
+          return roas180 !== null && roas180 >= 1;
+        })
+      : [];
+
+    const paybackWindows = recoveredPeriods
+      .map((period) => {
+        const recoveredDay = availableCohorts
+          .slice()
+          .sort((a, b) => cohortWindowDays(a) - cohortWindowDays(b))
+          .find((cohort) => {
+            const value = periodRoas.get(`${period}|||${cohort}`) ?? null;
+            return value !== null && value >= 1;
+          });
+        return recoveredDay ? cohortWindowDays(recoveredDay) : null;
+      })
+      .filter((value): value is number => value !== null);
+
+    const paybackWindowAverage =
+      paybackWindows.length > 0
+        ? paybackWindows.reduce((sum, value) => sum + value, 0) / paybackWindows.length
+        : null;
+
+    const targetD7ForPositiveD180 =
+      cohortD7 && recoveredPeriods.length > 0
+        ? recoveredPeriods
+            .map((period) => periodRoas.get(`${period}|||${cohortD7}`) ?? null)
+            .filter((value): value is number => value !== null)
+        : [];
+    const targetRoasD7 =
+      targetD7ForPositiveD180.length > 0
+        ? targetD7ForPositiveD180.reduce((sum, value) => sum + value, 0) / targetD7ForPositiveD180.length
+        : null;
+
+    return { roasD7, roasD14, roasD30, spendTotal, cpiAverage, paybackWindowAverage, targetRoasD7, recoveredCount: recoveredPeriods.length };
+  }, [availableCohorts, orderedPeriods, periodCost, periodInstalls, periodRoas]);
+
   function handleRatioMouseMove(event: ReactMouseEvent<SVGSVGElement>): void {
     if (ratioEvolutionRows.length === 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -1177,8 +1238,19 @@ export default function Page() {
   return (
     <main className="layout">
       <aside className="filters">
+        <div className="brandBlock">
+          <h1>ROAS Intelligence</h1>
+          <p>Panel operativo</p>
+        </div>
+
+        <div className="leftNav">
+          <button className="leftNavItem active" type="button">
+            Vista General
+          </button>
+        </div>
+
         <div className="titleRow">
-          <h1>ROAS Heatmap</h1>
+          <h2>Filtros</h2>
           <button className="modeBtn" type="button" onClick={() => setIsDarkMode((current) => !current)}>
             {isDarkMode ? 'Light mode' : 'Dark mode'}
           </button>
@@ -1299,6 +1371,42 @@ export default function Page() {
             el selector.
           </p>
         )}
+        <div className="overviewHero">
+          <h2>Vista General</h2>
+          <p>Rendimiento agregado de campañas y cohorts</p>
+        </div>
+        <div className="metricsGrid">
+          <article className="metricCard">
+            <span>ROAS D7</span>
+            <strong>{overviewMetrics.roasD7 === null ? 'N/A' : `${(overviewMetrics.roasD7 * 100).toFixed(1)}%`}</strong>
+          </article>
+          <article className="metricCard">
+            <span>ROAS D14</span>
+            <strong>{overviewMetrics.roasD14 === null ? 'N/A' : `${(overviewMetrics.roasD14 * 100).toFixed(1)}%`}</strong>
+          </article>
+          <article className="metricCard">
+            <span>ROAS D30</span>
+            <strong>{overviewMetrics.roasD30 === null ? 'N/A' : `${(overviewMetrics.roasD30 * 100).toFixed(1)}%`}</strong>
+          </article>
+          <article className="metricCard">
+            <span>Spend total</span>
+            <strong>{overviewMetrics.spendTotal.toLocaleString('en-US', { maximumFractionDigits: 2 })}</strong>
+          </article>
+          <article className="metricCard">
+            <span>CPI</span>
+            <strong>{overviewMetrics.cpiAverage === null ? 'N/A' : overviewMetrics.cpiAverage.toFixed(3)}</strong>
+          </article>
+          <article className="metricCard">
+            <span>Payback Window</span>
+            <strong>{overviewMetrics.paybackWindowAverage === null ? 'N/A' : `${Math.round(overviewMetrics.paybackWindowAverage)} días`}</strong>
+            <em>{overviewMetrics.recoveredCount > 0 ? `${overviewMetrics.recoveredCount} cohorts recuperados` : 'Sin cohorts recuperados'}</em>
+          </article>
+          <article className="metricCard metricCardWide">
+            <span>Target ROAS D7 for D180 positive ROI</span>
+            <strong>{overviewMetrics.targetRoasD7 === null ? 'N/A' : `${(overviewMetrics.targetRoasD7 * 100).toFixed(1)}%`}</strong>
+            <em>Promedio D7 tomado solo de cohorts recuperados en D180</em>
+          </article>
+        </div>
         <p className="legend">
           Tabla heatmap: primera columna según Order by, luego Ad spend, Installs, CPI y ROAS en porcentaje por
           cohort (D0, D3, D7, etc). Con &quot;Maturated cohorts only?&quot; activo, solo se muestran ventanas
