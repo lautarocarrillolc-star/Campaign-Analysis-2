@@ -430,6 +430,7 @@ export default function Page() {
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
   const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('all_time');
+  const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios'>('ltv');
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -1036,6 +1037,19 @@ export default function Page() {
     };
   }, [rows, heatmapRows, heatmapOrderBy, granularity, availableCohorts, maturedOnly, selectedCampaigns, selectedNetworks, selectedCountries, enableCountryFallback]);
 
+  const predictedLtv = useMemo(() => {
+    const out = new Map<string, number | null>();
+    orderedPeriods.forEach((period) => {
+      const cpi = periodCpi.get(period) ?? null;
+      availableCohorts.forEach((cohort) => {
+        const key = `${period}|||${cohort}`;
+        const roas = predictedRoas.get(key) ?? null;
+        out.set(key, roas === null || cpi === null ? null : roas * cpi);
+      });
+    });
+    return out;
+  }, [orderedPeriods, availableCohorts, predictedRoas, periodCpi]);
+
   const ratioEvolutionRows = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
     const maxAvailableDay = heatmapRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
@@ -1344,48 +1358,86 @@ export default function Page() {
           </div>
 
           <div>
-            <p className="legend">LTV Evolution (Revenue / Installs)</p>
-            <div className="heatmapScroll">
-              <table className="heatmap">
-                <thead>
-                  <tr>
-                    <th>{heatmapRowLabel}</th>
-                    <th>Ad spend</th>
-                    <th>Installs</th>
-                    <th>CPI</th>
-                    {availableCohorts.map((cohort) => (
-                      <th key={`ltv-${cohort}`}>{`LTV ${normalizeCohortLabel(cohort)}`}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {orderedPeriods.map((period) => (
-                    (() => {
-                      const rowValues = availableCohorts
-                        .map((cohort) => periodLtv.get(`${period}|||${cohort}`) ?? null)
-                        .filter((value): value is number => value !== null);
-                      const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : 1;
-                      return (
-                        <tr key={`ltv-${period}`}>
-                          <th>{period}</th>
-                          <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
-                          <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
-                          <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
-                          {availableCohorts.map((cohort) => {
-                            const value = periodLtv.get(`${period}|||${cohort}`) ?? null;
-                            return (
-                              <td key={`ltv-${period}-${cohort}`} style={heatmapStyle(value, rowMax, isDarkMode)}>
-                                {value === null ? '∞ / N/A' : value.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })()
-                  ))}
-                </tbody>
-              </table>
+            <div className="ratioHeader">
+              <p className="legend">{secondaryTableMode === 'ltv' ? 'LTV Evolution (Revenue / Installs)' : 'Ratio Evolution Table'}</p>
+              <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios')}>
+                <option value="ltv">LTV</option>
+                <option value="ratios">RATIOS</option>
+              </select>
             </div>
+            {secondaryTableMode === 'ltv' ? (
+              <div className="heatmapScroll">
+                <table className="heatmap">
+                  <thead>
+                    <tr>
+                      <th>{heatmapRowLabel}</th>
+                      <th>Ad spend</th>
+                      <th>Installs</th>
+                      <th>CPI</th>
+                      {availableCohorts.map((cohort) => (
+                        <th key={`ltv-${cohort}`}>{`LTV ${normalizeCohortLabel(cohort)}`}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderedPeriods.map((period) => (
+                      (() => {
+                        const rowValues = availableCohorts
+                          .map((cohort) => (enablePrediction ? predictedLtv.get(`${period}|||${cohort}`) : periodLtv.get(`${period}|||${cohort}`)) ?? null)
+                          .filter((value): value is number => value !== null);
+                        const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : 1;
+                        return (
+                          <tr key={`ltv-${period}`}>
+                            <th>{period}</th>
+                            <td>{(periodCost.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                            <td>{(periodInstalls.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                            <td>{(periodCpi.get(period) ?? null) === null ? 'N/A' : (periodCpi.get(period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 })}</td>
+                            {availableCohorts.map((cohort) => {
+                              const key = `${period}|||${cohort}`;
+                              const value = enablePrediction ? predictedLtv.get(key) ?? null : periodLtv.get(key) ?? null;
+                              const isPredicted = enablePrediction ? predictedMask.get(key) ?? false : false;
+                              return (
+                                <td key={`ltv-${period}-${cohort}`} className={isPredicted ? 'predictedCell' : undefined} style={heatmapStyle(value, rowMax, isDarkMode)}>
+                                  {value === null ? '∞ / N/A' : `${isPredicted ? '★ ' : ''}${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}${isPredicted ? '*' : ''}`}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })()
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="heatmapScroll">
+                <table className="heatmap">
+                  <thead>
+                    <tr>
+                      <th>Cohort date</th>
+                      {availableCohorts.slice(0, -1).map((from, index) => {
+                        const to = availableCohorts[index + 1];
+                        return <th key={`ratio-secondary-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ratioEvolutionRows.map((row) => (
+                      <tr key={`ratio-secondary-row-${row.period}`}>
+                        <th>{row.period}</th>
+                        {availableCohorts.slice(0, -1).map((from, index) => {
+                          const to = availableCohorts[index + 1];
+                          const key = ratioKey(from, to);
+                          const value = row.ratios[key] ?? null;
+                          const isPredicted = row.predicted[key] ?? false;
+                          return <td key={`ratio-secondary-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
 
