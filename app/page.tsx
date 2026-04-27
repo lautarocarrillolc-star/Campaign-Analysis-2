@@ -652,6 +652,21 @@ export default function Page() {
     );
   }, [filteredByDate, selectedOs, selectedCountries]);
 
+  const networkHistoricalRetentionRows = useMemo(() => {
+    const activeNetworks =
+      selectedNetworks.length > 0
+        ? selectedNetworks
+        : Array.from(new Set(scopedRows.map((row) => row.network)));
+
+    return filteredByDate.filter(
+      (row) =>
+        matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.country, selectedCountries) &&
+        (activeNetworks.length === 0 || activeNetworks.includes(row.network)) &&
+        (selectedCampaigns.length === 0 || !selectedCampaigns.includes(row.campaign))
+    );
+  }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks, selectedCampaigns, scopedRows]);
+
   const { orderedPeriods, periodCost, periodInstalls, periodCpi, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, periodJumpRatios, ratioDebugInfo, maxRoas, maturityDiagnostics } = useMemo(() => {
     const RATIO_PREDICTION_CONFIG = {
       trimPercent: 0.1,
@@ -1091,6 +1106,7 @@ export default function Page() {
     const osAcc: Record<string, Record<string, { weighted: number; installs: number }>> = { android: {}, ios: {}, other: {} };
     const countryAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
     const organicCountryAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
+    const networkHistoricalAcc: Record<string, { weighted: number; installs: number }> = {};
     const periodAcc: Record<string, Record<string, { weighted: number; installs: number }>> = {};
     const periodCountryCost: Record<string, Record<string, number>> = {};
     const periodOsCost: Record<string, Record<string, number>> = {};
@@ -1130,6 +1146,14 @@ export default function Page() {
       }
     }
 
+    for (const row of networkHistoricalRetentionRows) {
+      for (const cohort of availableRetentionCohorts) {
+        const value = row.retentionByCohort[cohort];
+        if (!Number.isFinite(value) || value <= 0 || row.installs <= 0) continue;
+        addSample(networkHistoricalAcc, cohort, value, row.installs);
+      }
+    }
+
     const average = (bucket?: { weighted: number; installs: number }): number | null =>
       !bucket || bucket.installs <= 0 ? null : bucket.weighted / bucket.installs;
 
@@ -1166,11 +1190,15 @@ export default function Page() {
           organicCountryFallback.weight > 0 ? organicCountryFallback.weighted / organicCountryFallback.weight : null;
 
         let fallback = enablePrediction
-          ? organicResolved ??
+          ? average(networkHistoricalAcc[cohort]) ??
+            organicResolved ??
             average(osAcc[topOs]?.[cohort]) ??
             (enableCountryFallback && topCountry ? average(countryAcc[topCountry]?.[cohort]) : null) ??
             average(globalAcc[cohort])
           : null;
+        if (cohortWindowDays(cohort) > 120) {
+          fallback = null;
+        }
         if (fallback !== null && previousResolvedRate !== null) {
           fallback = Math.min(fallback, previousResolvedRate);
         }
@@ -1204,7 +1232,8 @@ export default function Page() {
     predictedRoas,
     availableCohorts,
     periodCost,
-    organicRetentionRows
+    organicRetentionRows,
+    networkHistoricalRetentionRows
   ]);
 
   const ratioEvolutionRows = useMemo(() => {
@@ -1963,13 +1992,17 @@ export default function Page() {
                 <div className="simpleHint">Ejemplo: 10,000 installs con retención D3 de 0.12 ⇒ 1,200 usuarios retenidos D3.</div>
               </li>
               <li>
-                Si falta data y activás <b>Enable prediction</b>, primero buscamos retención <b>orgánica real</b> del país (o países) de esa campaña para esa ventana (ej: D60).
-                Si no existe, recién ahí caemos a fallback OS → país → global, y lo marcamos con ★.
-                <div className="simpleHint">Es una imputación con retención observada real (priorizando orgánico por país), no una predicción “caja negra”.</div>
+                Si falta data y activás <b>Enable prediction</b>, usamos fallback por capas:
+                histórico de campañas en la misma network → orgánico por país → OS → país → global.
+                <div className="simpleHint">Siempre usamos retención real observada; no es una predicción “caja negra”.</div>
               </li>
               <li>
                 Aplicamos una regla de consistencia temporal: un día más tardío no puede tener más retenidos que el día anterior.
                 <div className="simpleHint">Ejemplo: si D90 sale mayor que D60 por fallback, se ajusta para que D90 ≤ D60.</div>
+              </li>
+              <li>
+                Por ahora solo imputamos faltantes hasta <b>D120</b>. En D180/D360 no rellenamos si no hay dato real.
+                <div className="simpleHint">Esto evita sobreextender la señal cuando la evidencia tardía es muy débil.</div>
               </li>
               <li>
                 <b>Revenue left</b> es cuánto falta recuperar para break-even: <code>max(0, cost - revenue recuperado)</code>.
@@ -2099,3 +2132,4 @@ export default function Page() {
     </main>
   );
 }
+
