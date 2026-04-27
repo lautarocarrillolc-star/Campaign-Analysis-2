@@ -439,6 +439,8 @@ export default function Page() {
   const [dataSourceLabel, setDataSourceLabel] = useState('Campaign data.csv');
   const [selectedRatioKeys, setSelectedRatioKeys] = useState<string[]>([]);
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
+  const [bottomChartMode, setBottomChartMode] = useState<'roas' | 'ratios'>('roas');
+  const [ratioTableHeatmapEnabled, setRatioTableHeatmapEnabled] = useState(true);
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
   const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('last_3_months');
   const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios' | 'retained'>('ltv');
@@ -1282,7 +1284,7 @@ export default function Page() {
       });
   }, [heatmapRows, availableCohorts, granularity, maturedOnly, enablePrediction, periodJumpRatios]);
 
-  const evolutionSeries = useMemo(() => {
+  const roasEvolutionSeries = useMemo(() => {
     const palette = ['#56a8ff', '#fbbf24', '#6ee7b7', '#a78bfa', '#38bdf8', '#f472b6', '#93c5fd', '#22d3ee'];
     const visiblePeriods = orderedPeriods.slice(-8);
     return visiblePeriods.map((period, index) => ({
@@ -1300,9 +1302,27 @@ export default function Page() {
     }));
   }, [orderedPeriods, availableCohorts, enablePrediction, predictedRoas, periodRoas, predictedMask]);
 
+  const ratioChartSeries = useMemo(() => {
+    const palette = ['#56a8ff', '#fbbf24', '#6ee7b7', '#a78bfa', '#38bdf8', '#f472b6', '#93c5fd', '#22d3ee'];
+    const pairs = availableCohorts.slice(0, -1).map((from, index) => [from, availableCohorts[index + 1]] as const);
+    return pairs.map(([from, to], index) => {
+      const key = ratioKey(from, to);
+      return {
+        key,
+        label: `${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`,
+        color: palette[index % palette.length],
+        values: ratioEvolutionRows.map((row) => row.ratios[key] ?? null),
+        predicted: ratioEvolutionRows.map((row) => row.predicted[key] ?? false)
+      };
+    });
+  }, [availableCohorts, ratioEvolutionRows]);
+
+  const bottomChartSeries = bottomChartMode === 'roas' ? roasEvolutionSeries : ratioChartSeries;
+  const chartPointCount = bottomChartMode === 'roas' ? availableCohorts.length : ratioEvolutionRows.length;
+
   useEffect(() => {
-    setSelectedRatioKeys(evolutionSeries.map((series) => series.key));
-  }, [evolutionSeries]);
+    setSelectedRatioKeys(bottomChartSeries.map((series) => series.key));
+  }, [bottomChartSeries, bottomChartMode]);
 
   useEffect(() => {
     (globalThis as Record<string, unknown>).__ratioDebug = ratioDebugInfo;
@@ -1313,9 +1333,9 @@ export default function Page() {
   const chartPadding = { top: 24, right: 24, bottom: 62, left: 58 };
   const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
   const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
-  const activeSeries = evolutionSeries.filter((series) => selectedRatioKeys.includes(series.key));
+  const activeSeries = bottomChartSeries.filter((series) => selectedRatioKeys.includes(series.key));
   const maxRatioValue = Math.max(
-    1,
+    bottomChartMode === 'roas' ? 1 : 1.2,
     ...activeSeries.flatMap((series) => series.values.filter((value): value is number => value !== null))
   );
   const ratioYTicks = [0, 1, 2, 3, 4, 5].map((tick) => ({
@@ -1324,19 +1344,22 @@ export default function Page() {
   }));
   const hoveredRatioDetails = useMemo(() => {
     if (hoveredRatioIndex === null) return null;
-    const cohort = availableCohorts[hoveredRatioIndex];
-    if (!cohort) return null;
+    const xLabel =
+      bottomChartMode === 'roas'
+        ? normalizeCohortLabel(availableCohorts[hoveredRatioIndex] ?? '')
+        : ratioEvolutionRows[hoveredRatioIndex]?.period ?? '';
+    if (!xLabel) return null;
     return {
-      cohort: normalizeCohortLabel(cohort),
+      xLabel,
       details: activeSeries
         .map((series) => ({ label: series.label, color: series.color, value: series.values[hoveredRatioIndex], predicted: series.predicted[hoveredRatioIndex] ?? false }))
         .filter((entry): entry is { label: string; color: string; value: number; predicted: boolean } => entry.value !== null)
     };
-  }, [hoveredRatioIndex, availableCohorts, activeSeries]);
+  }, [hoveredRatioIndex, availableCohorts, activeSeries, bottomChartMode, ratioEvolutionRows]);
   const hoveredRatioX = useMemo(() => {
-    if (hoveredRatioIndex === null || availableCohorts.length === 0) return null;
-    return chartPadding.left + (plotWidth * hoveredRatioIndex) / Math.max(availableCohorts.length - 1, 1);
-  }, [hoveredRatioIndex, availableCohorts.length, chartPadding.left, plotWidth]);
+    if (hoveredRatioIndex === null || chartPointCount === 0) return null;
+    return chartPadding.left + (plotWidth * hoveredRatioIndex) / Math.max(chartPointCount - 1, 1);
+  }, [hoveredRatioIndex, chartPointCount, chartPadding.left, plotWidth]);
   const heatmapRowLabel =
     heatmapOrderBy === 'cohort_date'
       ? 'Cohort date'
@@ -1482,7 +1505,7 @@ export default function Page() {
   }, [ratioDebugInfo, orderedPeriods, enableCountryFallback]);
 
   function handleRatioMouseMove(event: ReactMouseEvent<SVGSVGElement>): void {
-    if (availableCohorts.length === 0) return;
+    if (chartPointCount === 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointerX = event.clientX - bounds.left;
     const pointerY = event.clientY - bounds.top;
@@ -1499,9 +1522,9 @@ export default function Page() {
     }
     const clampedX = Math.min(Math.max(relativeX, chartPadding.left), chartWidth - chartPadding.right);
     const ratio = (clampedX - chartPadding.left) / Math.max(plotWidth, 1);
-    const nextIndex = Math.round(ratio * Math.max(availableCohorts.length - 1, 0));
-    const pointX = chartPadding.left + (plotWidth * nextIndex) / Math.max(availableCohorts.length - 1, 1);
-    const hoverTolerance = Math.max(16, plotWidth / Math.max((availableCohorts.length - 1) * 3, 1));
+    const nextIndex = Math.round(ratio * Math.max(chartPointCount - 1, 0));
+    const pointX = chartPadding.left + (plotWidth * nextIndex) / Math.max(chartPointCount - 1, 1);
+    const hoverTolerance = Math.max(16, plotWidth / Math.max((chartPointCount - 1) * 3, 1));
     if (Math.abs(clampedX - pointX) > hoverTolerance) {
       setHoveredRatioIndex(null);
       return;
@@ -1842,33 +1865,57 @@ export default function Page() {
                 </table>
               </div>
             ) : secondaryTableMode === 'ratios' ? (
-              <div className="heatmapScroll">
-                <table className="heatmap">
-                  <thead>
-                    <tr>
-                      <th>Cohort date</th>
-                      {availableCohorts.slice(0, -1).map((from, index) => {
-                        const to = availableCohorts[index + 1];
-                        return <th key={`ratio-secondary-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
-                      })}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ratioEvolutionRows.map((row) => (
-                      <tr key={`ratio-secondary-row-${row.period}`}>
-                        <th>{row.period}</th>
+              <>
+                <label className="toggleRow">
+                  <input
+                    type="checkbox"
+                    checked={ratioTableHeatmapEnabled}
+                    onChange={(event) => setRatioTableHeatmapEnabled(event.target.checked)}
+                  />
+                  <span>Heatmap? {ratioTableHeatmapEnabled ? 'Yes' : 'No'}</span>
+                </label>
+                <div className="heatmapScroll">
+                  <table className="heatmap">
+                    <thead>
+                      <tr>
+                        <th>Cohort date</th>
                         {availableCohorts.slice(0, -1).map((from, index) => {
                           const to = availableCohorts[index + 1];
-                          const key = ratioKey(from, to);
-                          const value = row.ratios[key] ?? null;
-                          const isPredicted = row.predicted[key] ?? false;
-                          return <td key={`ratio-secondary-val-${row.period}-${from}`}>{value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}</td>;
+                          return <th key={`ratio-secondary-${from}-${to}`}>{`${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`}</th>;
                         })}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {ratioEvolutionRows.map((row) => {
+                        const rowValues = availableCohorts
+                          .slice(0, -1)
+                          .map((from, index) => row.ratios[ratioKey(from, availableCohorts[index + 1])] ?? null)
+                          .filter((value): value is number => value !== null);
+                        const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : 1;
+                        return (
+                          <tr key={`ratio-secondary-row-${row.period}`}>
+                            <th>{row.period}</th>
+                            {availableCohorts.slice(0, -1).map((from, index) => {
+                              const to = availableCohorts[index + 1];
+                              const key = ratioKey(from, to);
+                              const value = row.ratios[key] ?? null;
+                              const isPredicted = row.predicted[key] ?? false;
+                              return (
+                                <td
+                                  key={`ratio-secondary-val-${row.period}-${from}`}
+                                  style={ratioTableHeatmapEnabled ? heatmapStyle(value, rowMax, isDarkMode) : undefined}
+                                >
+                                  {value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             ) : (
               <div className="heatmapScroll">
                 <table className="heatmap">
@@ -2015,10 +2062,18 @@ export default function Page() {
         <div className="ratioChartCard">
           <div className="ratioHeader">
             <h3>Evolución de ROAS por Cohort</h3>
+            <select value={bottomChartMode} onChange={(event) => setBottomChartMode(event.target.value as 'roas' | 'ratios')}>
+              <option value="roas">ROAS</option>
+              <option value="ratios">RATIOS</option>
+            </select>
           </div>
-          <p className="legend">Cada línea es un cohort date. Eje X = ventanas (D0..D360). Eje Y = ROAS.</p>
+          <p className="legend">
+            {bottomChartMode === 'roas'
+              ? 'Cada línea es un cohort date. Eje X = ventanas (D0..D360). Eje Y = ROAS.'
+              : 'Cada línea es un salto de ratio. Eje X = cohort date. Eje Y = ratio (x).'}
+          </p>
           <div className="ratioToggleWrap">
-            {evolutionSeries.map((series) => {
+            {bottomChartSeries.map((series) => {
               const active = selectedRatioKeys.includes(series.key);
               return (
                 <button
@@ -2052,30 +2107,44 @@ export default function Page() {
               ))}
               <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
               <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
-              <text x={14} y={chartPadding.top + 6} className="axisLabel">ROAS</text>
+              <text x={14} y={chartPadding.top + 6} className="axisLabel">{bottomChartMode === 'roas' ? 'ROAS' : 'Ratio'}</text>
               {ratioYTicks.map(({ y, value }) => (
                 <text key={`ytick-${y}`} x={chartPadding.left - 8} y={y + 4} textAnchor="end" className="axisLabel">
-                  {(value * 100).toFixed(0)}%
+                  {bottomChartMode === 'roas' ? `${(value * 100).toFixed(0)}%` : `${value.toFixed(2)}x`}
                 </text>
               ))}
 
-              {availableCohorts.map((cohort, index) => {
-                const x = chartPadding.left + (plotWidth * index) / Math.max(availableCohorts.length - 1, 1);
-                return (
-                  <text key={`xtick-${cohort}`} x={x} y={chartHeight - 18} textAnchor="middle" className="axisLabel">
-                    {normalizeCohortLabel(cohort)}
-                  </text>
-                );
-              })}
+              {bottomChartMode === 'roas' ? (
+                availableCohorts.map((cohort, index) => {
+                  const x = chartPadding.left + (plotWidth * index) / Math.max(availableCohorts.length - 1, 1);
+                  return (
+                    <text key={`xtick-${cohort}`} x={x} y={chartHeight - 18} textAnchor="middle" className="axisLabel">
+                      {normalizeCohortLabel(cohort)}
+                    </text>
+                  );
+                })
+              ) : (
+                ratioEvolutionRows.length > 0 && (
+                  <>
+                    <text x={chartPadding.left} y={chartHeight - 18} className="axisLabel">{ratioEvolutionRows[0]?.period}</text>
+                    <text x={chartPadding.left + plotWidth / 2 - 40} y={chartHeight - 18} className="axisLabel">
+                      {ratioEvolutionRows[Math.floor((ratioEvolutionRows.length - 1) / 2)]?.period}
+                    </text>
+                    <text x={chartWidth - chartPadding.right - 90} y={chartHeight - 18} className="axisLabel">
+                      {ratioEvolutionRows[ratioEvolutionRows.length - 1]?.period}
+                    </text>
+                  </>
+                )
+              )}
 
               {activeSeries.map((series) => {
                 type RoasPoint = { x: number; y: number; value: number; cohort: string; predicted: boolean };
                 const points = series.values
                   .map((value, index) => {
                     if (value === null) return null;
-                    const x = chartPadding.left + (plotWidth * index) / Math.max(availableCohorts.length - 1, 1);
+                    const x = chartPadding.left + (plotWidth * index) / Math.max(chartPointCount - 1, 1);
                     const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                    return { x, y, value, cohort: availableCohorts[index], predicted: series.predicted[index] ?? false };
+                    return { x, y, value, cohort: bottomChartMode === 'roas' ? availableCohorts[index] : ratioEvolutionRows[index]?.period ?? '', predicted: series.predicted[index] ?? false };
                   })
                   .filter((point): point is RoasPoint => point !== null);
                 const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
@@ -2092,7 +2161,7 @@ export default function Page() {
                         stroke={series.color}
                         className={point.predicted ? 'ratioPredictedPoint' : 'ratioPoint'}
                       >
-                        <title>{`${series.label} | ${normalizeCohortLabel(point.cohort)} | ${(point.value * 100).toFixed(1)}%${point.predicted ? ' (pred)' : ''}`}</title>
+                        <title>{`${series.label} | ${bottomChartMode === 'roas' ? normalizeCohortLabel(point.cohort) : point.cohort} | ${bottomChartMode === 'roas' ? `${(point.value * 100).toFixed(1)}%` : `${point.value.toFixed(3)}x`}${point.predicted ? ' (pred)' : ''}`}</title>
                       </circle>
                     ))}
                   </g>
@@ -2112,12 +2181,12 @@ export default function Page() {
                 className="ratioHoverPanel"
                 style={{ left: `${Math.min(Math.max((hoveredRatioX / chartWidth) * 100 + 2, 2), 66)}%` }}
               >
-                <b>{hoveredRatioDetails.cohort}</b>
+                <b>{hoveredRatioDetails.xLabel}</b>
                 <ul>
                   {hoveredRatioDetails.details.length > 0 ? (
                     hoveredRatioDetails.details.map((entry) => (
                       <li key={`hover-${entry.label}`}>
-                        <span className="hoverLabel" style={{ color: entry.color }}>{entry.label}</span> = {(entry.value * 100).toFixed(1)}%{entry.predicted ? ' (pred)' : ''}
+                        <span className="hoverLabel" style={{ color: entry.color }}>{entry.label}</span> = {bottomChartMode === 'roas' ? `${(entry.value * 100).toFixed(1)}%` : `${entry.value.toFixed(3)}x`}{entry.predicted ? ' (pred)' : ''}
                       </li>
                     ))
                   ) : (
