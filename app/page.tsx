@@ -441,6 +441,7 @@ export default function Page() {
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
   const [bottomChartMode, setBottomChartMode] = useState<'roas' | 'ratios'>('roas');
   const [ratioTableHeatmapEnabled, setRatioTableHeatmapEnabled] = useState(true);
+  const [mainViewTab, setMainViewTab] = useState<'dashboard' | 'graficos'>('dashboard');
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
   const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('last_3_months');
   const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios' | 'retained'>('ltv');
@@ -1694,6 +1695,25 @@ export default function Page() {
           <h2>Vista General</h2>
           <p>Rendimiento agregado de campañas y cohorts</p>
         </div>
+        <div className="viewTabs">
+          <button
+            type="button"
+            className={`viewTabBtn ${mainViewTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setMainViewTab('dashboard')}
+          >
+            Dashboard
+          </button>
+          <button
+            type="button"
+            className={`viewTabBtn ${mainViewTab === 'graficos' ? 'active' : ''}`}
+            onClick={() => setMainViewTab('graficos')}
+          >
+            Gráficos
+          </button>
+        </div>
+
+        {mainViewTab === 'dashboard' && (
+          <>
         <div className="metricsGrid">
           <article className="metricCard">
             <span>ROAS D7</span>
@@ -2058,8 +2078,11 @@ export default function Page() {
             </ol>
           </div>
         )}
+          </>
+        )}
 
-        <div className="ratioChartCard">
+        {mainViewTab === 'graficos' && (
+        <div className={`ratioChartCard ${mainViewTab === 'graficos' ? 'chartTabCard' : ''}`}>
           <div className="ratioHeader">
             <h3>Evolución de ROAS por Cohort</h3>
             <select value={bottomChartMode} onChange={(event) => setBottomChartMode(event.target.value as 'roas' | 'ratios')}>
@@ -2197,6 +2220,7 @@ export default function Page() {
             )}
           </div>
         </div>
+        )}
       </section>
     </main>
   );
