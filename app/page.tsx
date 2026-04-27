@@ -1138,6 +1138,7 @@ export default function Page() {
       const topOs = Object.entries(periodOsCost[period] ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
       const topCountry = Object.entries(periodCountryCost[period] ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
       const periodCountries = Object.keys(periodCountryCost[period] ?? {});
+      let previousResolvedRate: number | null = null;
 
       for (const cohort of availableRetentionCohorts) {
         const key = `${period}|||${cohort}`;
@@ -1147,6 +1148,7 @@ export default function Page() {
           periodRetentionResolved.set(key, actual);
           periodRetentionPredictedMask.set(key, false);
           periodRetainedUsers.set(key, installs > 0 ? actual * installs : null);
+          previousResolvedRate = actual;
           continue;
         }
         const organicCountryFallback = periodCountries.length > 0
@@ -1163,15 +1165,21 @@ export default function Page() {
         const organicResolved =
           organicCountryFallback.weight > 0 ? organicCountryFallback.weighted / organicCountryFallback.weight : null;
 
-        const fallback = enablePrediction
+        let fallback = enablePrediction
           ? organicResolved ??
             average(osAcc[topOs]?.[cohort]) ??
             (enableCountryFallback && topCountry ? average(countryAcc[topCountry]?.[cohort]) : null) ??
             average(globalAcc[cohort])
           : null;
+        if (fallback !== null && previousResolvedRate !== null) {
+          fallback = Math.min(fallback, previousResolvedRate);
+        }
         periodRetentionResolved.set(key, fallback);
         periodRetentionPredictedMask.set(key, fallback !== null);
         periodRetainedUsers.set(key, fallback !== null && installs > 0 ? fallback * installs : null);
+        if (fallback !== null) {
+          previousResolvedRate = fallback;
+        }
       }
 
       const bestRoas = availableCohorts.reduce((max, cohort) => {
@@ -1958,6 +1966,10 @@ export default function Page() {
                 Si falta data y activás <b>Enable prediction</b>, primero buscamos retención <b>orgánica real</b> del país (o países) de esa campaña para esa ventana (ej: D60).
                 Si no existe, recién ahí caemos a fallback OS → país → global, y lo marcamos con ★.
                 <div className="simpleHint">Es una imputación con retención observada real (priorizando orgánico por país), no una predicción “caja negra”.</div>
+              </li>
+              <li>
+                Aplicamos una regla de consistencia temporal: un día más tardío no puede tener más retenidos que el día anterior.
+                <div className="simpleHint">Ejemplo: si D90 sale mayor que D60 por fallback, se ajusta para que D90 ≤ D60.</div>
               </li>
               <li>
                 <b>Revenue left</b> es cuánto falta recuperar para break-even: <code>max(0, cost - revenue recuperado)</code>.
