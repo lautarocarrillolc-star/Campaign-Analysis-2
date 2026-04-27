@@ -285,6 +285,26 @@ input {
   color: var(--muted);
 }
 
+.viewTabs {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.viewTabBtn {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.viewTabBtn.active {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
 .metricsGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(190px, 1fr));
@@ -447,6 +467,11 @@ input {
   background: var(--panel);
   width: min(72vw, 1700px);
   min-width: 880px;
+}
+
+.chartTabCard {
+  width: min(88vw, 2100px);
+  min-width: 980px;
 }
 
 .ratioChartCard h3 {
@@ -629,6 +654,11 @@ input {
     width: 100%;
     min-width: 0;
   }
+
+  .chartTabCard {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 @media (max-width: 640px) {
@@ -667,3 +697,4 @@ input {
     stroke-dashoffset: 0;
   }
 }
+
