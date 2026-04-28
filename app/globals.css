@@ -522,7 +522,9 @@ input {
   display: block;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--panel) 90%, #0a1628 10%);
+  background:
+    radial-gradient(circle at 12% 8%, color-mix(in srgb, var(--accent) 16%, transparent 84%), transparent 36%),
+    linear-gradient(145deg, color-mix(in srgb, #0f172a 82%, var(--panel) 18%), color-mix(in srgb, #020617 78%, var(--panel) 22%));
 }
 
 .ratioChartWrap {
@@ -539,7 +541,7 @@ input {
 }
 
 .gridLine {
-  stroke: var(--border);
+  stroke: color-mix(in srgb, #cbd5e1 28%, transparent 72%);
   stroke-dasharray: 3 4;
 }
 
@@ -556,11 +558,12 @@ input {
 
 .ratioLine {
   fill: none;
-  stroke-width: 2.5;
+  stroke-width: 2.8;
   stroke-linecap: round;
   stroke-linejoin: round;
   opacity: 0.95;
-  transition: opacity 260ms ease, d 260ms ease;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 50%, transparent 50%));
+  transition: opacity 260ms ease, d 260ms ease, filter 260ms ease;
 }
 
 .roasAnimatedLine {
