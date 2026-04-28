@@ -1337,7 +1337,7 @@ export default function Page() {
   }, [ratioDebugInfo]);
 
   const chartWidth = 1180;
-  const chartHeight = 420;
+  const chartHeight = mainViewTab === 'graficos' ? 520 : 420;
   const chartPadding = { top: 24, right: 24, bottom: 62, left: 58 };
   const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
   const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
@@ -1516,14 +1516,8 @@ export default function Page() {
     if (chartPointCount === 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointerX = event.clientX - bounds.left;
-    const pointerY = event.clientY - bounds.top;
     const relativeX = (pointerX / bounds.width) * chartWidth;
-    const relativeY = (pointerY / bounds.height) * chartHeight;
-    const isInsidePlot =
-      relativeX >= chartPadding.left &&
-      relativeX <= chartWidth - chartPadding.right &&
-      relativeY >= chartPadding.top &&
-      relativeY <= chartPadding.top + plotHeight;
+    const isInsidePlot = relativeX >= chartPadding.left && relativeX <= chartWidth - chartPadding.right;
     if (!isInsidePlot) {
       setHoveredRatioIndex(null);
       return;
@@ -1532,7 +1526,7 @@ export default function Page() {
     const ratio = (clampedX - chartPadding.left) / Math.max(plotWidth, 1);
     const nextIndex = Math.round(ratio * Math.max(chartPointCount - 1, 0));
     const pointX = chartPadding.left + (plotWidth * nextIndex) / Math.max(chartPointCount - 1, 1);
-    const hoverTolerance = Math.max(16, plotWidth / Math.max((chartPointCount - 1) * 3, 1));
+    const hoverTolerance = Math.max(36, plotWidth / Math.max((chartPointCount - 1) * 2.2, 1));
     if (Math.abs(clampedX - pointX) > hoverTolerance) {
       setHoveredRatioIndex(null);
       return;
