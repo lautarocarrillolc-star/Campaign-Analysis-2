@@ -2131,6 +2131,7 @@ export default function Page() {
             <svg
               className="ratioChart"
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+              preserveAspectRatio="none"
               role="img"
               aria-label="ROAS evolution chart"
               onMouseMove={handleRatioMouseMove}
@@ -2259,4 +2260,3 @@ export default function Page() {
     </main>
   );
 }
-
