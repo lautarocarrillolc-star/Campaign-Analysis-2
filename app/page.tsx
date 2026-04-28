@@ -1326,7 +1326,11 @@ export default function Page() {
   }, [availableCohorts, ratioEvolutionRows]);
 
   const bottomChartSeries = bottomChartMode === 'roas' ? roasEvolutionSeries : ratioChartSeries;
-  const chartPointCount = bottomChartMode === 'roas' ? availableCohorts.length : ratioEvolutionRows.length;
+  const roasVisibleCohorts = useMemo(
+    () => availableCohorts.filter((_, index) => roasEvolutionSeries.some((series) => series.values[index] !== null)),
+    [availableCohorts, roasEvolutionSeries]
+  );
+  const chartPointCount = bottomChartMode === 'roas' ? roasVisibleCohorts.length : ratioEvolutionRows.length;
 
   useEffect(() => {
     setSelectedRatioKeys(bottomChartSeries.map((series) => series.key));
@@ -1354,16 +1358,22 @@ export default function Page() {
     if (hoveredRatioIndex === null) return null;
     const xLabel =
       bottomChartMode === 'roas'
-        ? normalizeCohortLabel(availableCohorts[hoveredRatioIndex] ?? '')
+        ? normalizeCohortLabel(roasVisibleCohorts[hoveredRatioIndex] ?? '')
         : ratioEvolutionRows[hoveredRatioIndex]?.period ?? '';
     if (!xLabel) return null;
+    const roasIndex = bottomChartMode === 'roas' ? availableCohorts.indexOf(roasVisibleCohorts[hoveredRatioIndex] ?? '') : -1;
     return {
       xLabel,
       details: activeSeries
-        .map((series) => ({ label: series.label, color: series.color, value: series.values[hoveredRatioIndex], predicted: series.predicted[hoveredRatioIndex] ?? false }))
+        .map((series) => ({
+          label: series.label,
+          color: series.color,
+          value: bottomChartMode === 'roas' ? (roasIndex >= 0 ? series.values[roasIndex] : null) : series.values[hoveredRatioIndex],
+          predicted: bottomChartMode === 'roas' ? (roasIndex >= 0 ? series.predicted[roasIndex] ?? false : false) : series.predicted[hoveredRatioIndex] ?? false
+        }))
         .filter((entry): entry is { label: string; color: string; value: number; predicted: boolean } => entry.value !== null)
     };
-  }, [hoveredRatioIndex, availableCohorts, activeSeries, bottomChartMode, ratioEvolutionRows]);
+  }, [hoveredRatioIndex, availableCohorts, activeSeries, bottomChartMode, ratioEvolutionRows, roasVisibleCohorts]);
   const hoveredRatioX = useMemo(() => {
     if (hoveredRatioIndex === null || chartPointCount === 0) return null;
     return chartPadding.left + (plotWidth * hoveredRatioIndex) / Math.max(chartPointCount - 1, 1);
@@ -2147,8 +2157,8 @@ export default function Page() {
               ))}
 
               {bottomChartMode === 'roas' ? (
-                availableCohorts.map((cohort, index) => {
-                  const x = chartPadding.left + (plotWidth * index) / Math.max(availableCohorts.length - 1, 1);
+                roasVisibleCohorts.map((cohort, index) => {
+                  const x = chartPadding.left + (plotWidth * index) / Math.max(roasVisibleCohorts.length - 1, 1);
                   return (
                     <text key={`xtick-${cohort}`} x={x} y={chartHeight - 18} textAnchor="middle" className="axisLabel">
                       {normalizeCohortLabel(cohort)}
@@ -2171,12 +2181,27 @@ export default function Page() {
 
               {activeSeries.map((series, seriesIndex) => {
                 type RoasPoint = { x: number; y: number; value: number; cohort: string; predicted: boolean };
-                const points = series.values
+                const chartValues =
+                  bottomChartMode === 'roas'
+                    ? roasVisibleCohorts.map((cohort) => {
+                        const originalIndex = availableCohorts.indexOf(cohort);
+                        return {
+                          value: originalIndex >= 0 ? series.values[originalIndex] : null,
+                          predicted: originalIndex >= 0 ? series.predicted[originalIndex] ?? false : false,
+                          cohort
+                        };
+                      })
+                    : series.values.map((value, index) => ({
+                        value,
+                        predicted: series.predicted[index] ?? false,
+                        cohort: ratioEvolutionRows[index]?.period ?? ''
+                      }));
+                const points = chartValues
                   .map((value, index) => {
-                    if (value === null) return null;
+                    if (value.value === null) return null;
                     const x = chartPadding.left + (plotWidth * index) / Math.max(chartPointCount - 1, 1);
-                    const y = chartPadding.top + plotHeight - (value / maxRatioValue) * plotHeight;
-                    return { x, y, value, cohort: bottomChartMode === 'roas' ? availableCohorts[index] : ratioEvolutionRows[index]?.period ?? '', predicted: series.predicted[index] ?? false };
+                    const y = chartPadding.top + plotHeight - (value.value / maxRatioValue) * plotHeight;
+                    return { x, y, value: value.value, cohort: value.cohort, predicted: value.predicted };
                   })
                   .filter((point): point is RoasPoint => point !== null);
                 const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
@@ -2234,3 +2259,4 @@ export default function Page() {
     </main>
   );
 }
+
