@@ -342,6 +342,15 @@ function buildLinePath(points: Array<{ x: number; y: number }>): string {
   return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 }
 
+function buildChartTone(index: number, total: number): { color: string; accent: string } {
+  const safeTotal = Math.max(total, 1);
+  const hue = (195 + (index * 320) / safeTotal) % 360;
+  return {
+    color: `hsl(${hue} 85% 61%)`,
+    accent: `hsl(${(hue + 24) % 360} 82% 57%)`
+  };
+}
+
 function matchesSelection(value: string, selectedValues: string[]): boolean {
   return selectedValues.length === 0 || selectedValues.includes(value);
 }
@@ -1286,12 +1295,11 @@ export default function Page() {
   }, [heatmapRows, availableCohorts, granularity, maturedOnly, enablePrediction, periodJumpRatios]);
 
   const roasEvolutionSeries = useMemo(() => {
-    const palette = ['#56a8ff', '#fbbf24', '#6ee7b7', '#a78bfa', '#38bdf8', '#f472b6', '#93c5fd', '#22d3ee'];
     const visiblePeriods = orderedPeriods.slice(-8);
     return visiblePeriods.map((period, index) => ({
+      ...buildChartTone(index, visiblePeriods.length),
       key: period,
       label: period,
-      color: palette[index % palette.length],
       values: availableCohorts.map((cohort) => {
         const key = `${period}|||${cohort}`;
         return enablePrediction ? predictedRoas.get(key) ?? null : periodRoas.get(key) ?? null;
@@ -1304,14 +1312,13 @@ export default function Page() {
   }, [orderedPeriods, availableCohorts, enablePrediction, predictedRoas, periodRoas, predictedMask]);
 
   const ratioChartSeries = useMemo(() => {
-    const palette = ['#56a8ff', '#fbbf24', '#6ee7b7', '#a78bfa', '#38bdf8', '#f472b6', '#93c5fd', '#22d3ee'];
     const pairs = availableCohorts.slice(0, -1).map((from, index) => [from, availableCohorts[index + 1]] as const);
     return pairs.map(([from, to], index) => {
       const key = ratioKey(from, to);
       return {
+        ...buildChartTone(index, pairs.length),
         key,
         label: `${normalizeCohortLabel(from)}→${normalizeCohortLabel(to)}`,
-        color: palette[index % palette.length],
         values: ratioEvolutionRows.map((row) => row.ratios[key] ?? null),
         predicted: ratioEvolutionRows.map((row) => row.predicted[key] ?? false)
       };
@@ -2125,6 +2132,14 @@ export default function Page() {
               onMouseMove={handleRatioMouseMove}
               onMouseLeave={() => setHoveredRatioIndex(null)}
             >
+              <defs>
+                {activeSeries.map((series, index) => (
+                  <linearGradient key={`grad-${series.key}`} id={`series-grad-${index}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor={series.color} />
+                    <stop offset="100%" stopColor={series.accent} />
+                  </linearGradient>
+                ))}
+              </defs>
               {ratioYTicks.map(({ y }, tick) => (
                 <line key={`grid-${tick}`} x1={chartPadding.left} x2={chartWidth - chartPadding.right} y1={y} y2={y} className="gridLine" />
               ))}
@@ -2160,7 +2175,7 @@ export default function Page() {
                 )
               )}
 
-              {activeSeries.map((series) => {
+              {activeSeries.map((series, seriesIndex) => {
                 type RoasPoint = { x: number; y: number; value: number; cohort: string; predicted: boolean };
                 const points = series.values
                   .map((value, index) => {
@@ -2173,7 +2188,7 @@ export default function Page() {
                 const d = buildLinePath(points.map((point) => ({ x: point.x, y: point.y })));
                 return (
                   <g key={`line-${series.key}`}>
-                    <path d={d} stroke={series.color} className="ratioLine roasAnimatedLine" />
+                    <path d={d} stroke={`url(#series-grad-${seriesIndex})`} className="ratioLine roasAnimatedLine" />
                     {points.map((point) => (
                       <circle
                         key={`${series.key}-${point.x}`}
@@ -2225,4 +2240,3 @@ export default function Page() {
     </main>
   );
 }
-
