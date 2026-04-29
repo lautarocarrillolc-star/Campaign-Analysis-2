@@ -450,6 +450,7 @@ export default function Page() {
   const [hoveredRatioIndex, setHoveredRatioIndex] = useState<number | null>(null);
   const [bottomChartMode, setBottomChartMode] = useState<'roas' | 'ratios'>('roas');
   const [ratioTableHeatmapEnabled, setRatioTableHeatmapEnabled] = useState(true);
+  const [ratioTableMode, setRatioTableMode] = useState<'growth' | 'distribution'>('growth');
   const [mainViewTab, setMainViewTab] = useState<'dashboard' | 'graficos'>('dashboard');
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
   const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('last_3_months');
@@ -1248,7 +1249,12 @@ export default function Page() {
     networkHistoricalRetentionRows
   ]);
 
-  const ratioEvolutionRows = useMemo(() => {
+  const cohortPairs = useMemo(
+    () => availableCohorts.slice(0, -1).map((cohort, index) => [cohort, availableCohorts[index + 1]] as const),
+    [availableCohorts]
+  );
+
+  const periodRevenueByPeriod = useMemo(() => {
     const periodRevenue = new Map<string, Record<string, number>>();
     const maxAvailableDay = heatmapRows.reduce((max, row) => (row.day > max ? row.day : max), new Date(0));
 
@@ -1265,18 +1271,17 @@ export default function Page() {
       }
       periodRevenue.set(period, current);
     }
+    return periodRevenue;
+  }, [heatmapRows, availableCohorts, granularity, maturedOnly]);
 
-    const pairs = availableCohorts
-      .slice(0, -1)
-      .map((cohort, index) => [cohort, availableCohorts[index + 1]] as const);
-
-    return Array.from(periodRevenue.entries())
+  const ratioEvolutionRows = useMemo(() => {
+    return Array.from(periodRevenueByPeriod.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([period, revenues]) => {
         const ratios: Record<string, number | null> = {};
         const predicted: Record<string, boolean> = {};
         const fallbackRatios = periodJumpRatios.get(period) ?? {};
-        for (const [from, to] of pairs) {
+        for (const [from, to] of cohortPairs) {
           const key = ratioKey(from, to);
           const fromValue = revenues[from] ?? 0;
           const toValue = revenues[to] ?? 0;
@@ -1292,7 +1297,32 @@ export default function Page() {
         }
         return { period, ratios, predicted };
       });
-  }, [heatmapRows, availableCohorts, granularity, maturedOnly, enablePrediction, periodJumpRatios]);
+  }, [periodRevenueByPeriod, enablePrediction, periodJumpRatios, cohortPairs]);
+
+  const periodDistributionRatios = useMemo(() => {
+    return Array.from(periodRevenueByPeriod.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, revenues]) => {
+        const denominator =
+          [...availableCohorts]
+            .reverse()
+            .map((cohort) => revenues[cohort] ?? null)
+            .find((value): value is number => value !== null && value > 0) ?? null;
+        const ratios: Record<string, number | null> = {};
+        for (const [from, to] of cohortPairs) {
+          const key = ratioKey(from, to);
+          const fromValue = revenues[from] ?? null;
+          const toValue = revenues[to] ?? null;
+          if (denominator === null || fromValue === null || toValue === null) {
+            ratios[key] = null;
+            continue;
+          }
+          const bucketRevenue = toValue - fromValue;
+          ratios[key] = bucketRevenue >= 0 && denominator > 0 ? bucketRevenue / denominator : null;
+        }
+        return { period, ratios, denominator };
+      });
+  }, [periodRevenueByPeriod, availableCohorts, cohortPairs]);
 
   const roasEvolutionSeries = useMemo(() => {
     const visiblePeriods = orderedPeriods.slice(-8);
@@ -1845,6 +1875,13 @@ export default function Page() {
                     ? 'Ratio Evolution Table'
                     : 'Usuarios retenidos por cohort'}
               </p>
+              <span className="tableContext">
+                {secondaryTableMode === 'ltv'
+                  ? 'Muestra cuánto revenue aporta cada install por ventana.'
+                  : secondaryTableMode === 'ratios'
+                    ? 'Compara el crecimiento entre ventanas o su peso en el lifetime.'
+                    : 'Resume usuarios retenidos por ventana y revenue restante para break-even.'}
+              </span>
               <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios' | 'retained')}>
                 <option value="ltv">LTV</option>
                 <option value="ratios">RATIOS</option>
@@ -1897,6 +1934,22 @@ export default function Page() {
               </div>
             ) : secondaryTableMode === 'ratios' ? (
               <>
+                <div className="ratioModeTabs">
+                  <button
+                    type="button"
+                    className={`ratioModeBtn ${ratioTableMode === 'growth' ? 'active' : ''}`}
+                    onClick={() => setRatioTableMode('growth')}
+                  >
+                    Growth ratio
+                  </button>
+                  <button
+                    type="button"
+                    className={`ratioModeBtn ${ratioTableMode === 'distribution' ? 'active' : ''}`}
+                    onClick={() => setRatioTableMode('distribution')}
+                  >
+                    Distribution ratio
+                  </button>
+                </div>
                 <label className="toggleRow">
                   <input
                     type="checkbox"
@@ -1917,26 +1970,26 @@ export default function Page() {
                       </tr>
                     </thead>
                     <tbody>
-                      {ratioEvolutionRows.map((row) => {
-                        const rowValues = availableCohorts
-                          .slice(0, -1)
-                          .map((from, index) => row.ratios[ratioKey(from, availableCohorts[index + 1])] ?? null)
+                      {(ratioTableMode === 'growth' ? ratioEvolutionRows : periodDistributionRatios).map((row) => {
+                        const rowValues = cohortPairs
+                          .map(([from, to]) => row.ratios[ratioKey(from, to)] ?? null)
                           .filter((value): value is number => value !== null);
                         const rowMax = rowValues.length > 0 ? Math.max(...rowValues) : 1;
                         return (
                           <tr key={`ratio-secondary-row-${row.period}`}>
                             <th>{row.period}</th>
-                            {availableCohorts.slice(0, -1).map((from, index) => {
-                              const to = availableCohorts[index + 1];
+                            {cohortPairs.map(([from, to]) => {
                               const key = ratioKey(from, to);
                               const value = row.ratios[key] ?? null;
-                              const isPredicted = row.predicted[key] ?? false;
+                              const isPredicted = ratioTableMode === 'growth' ? row.predicted[key] ?? false : false;
                               return (
                                 <td
                                   key={`ratio-secondary-val-${row.period}-${from}`}
                                   style={ratioTableHeatmapEnabled ? heatmapStyle(value, rowMax, isDarkMode) : undefined}
                                 >
-                                  {value === null ? 'N/A' : `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`}
+                                  {value === null ? '—' : ratioTableMode === 'growth'
+                                    ? `${isPredicted ? '★ ' : ''}${value.toFixed(3)}x`
+                                    : `${(value * 100).toFixed(1)}%`}
                                 </td>
                               );
                             })}
@@ -2260,3 +2313,4 @@ export default function Page() {
     </main>
   );
 }
+
