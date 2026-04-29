@@ -360,11 +360,39 @@ input {
 }
 
 .tableTitle {
-  margin: 0 0 10px;
+  margin: 0;
   color: #f8fbff;
   font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.02em;
+}
+
+.tableContext {
+  display: block;
+  margin: 4px auto 10px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ratioModeTabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.ratioModeBtn {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 11px;
+  cursor: pointer;
+}
+
+.ratioModeBtn.active {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .sourceInfo {
@@ -707,3 +735,4 @@ input {
     stroke-dashoffset: 0;
   }
 }
+
