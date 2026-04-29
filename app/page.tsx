@@ -1981,7 +1981,8 @@ export default function Page() {
                             {cohortPairs.map(([from, to]) => {
                               const key = ratioKey(from, to);
                               const value = row.ratios[key] ?? null;
-                              const isPredicted = ratioTableMode === 'growth' ? row.predicted[key] ?? false : false;
+                              const isPredicted =
+                                ratioTableMode === 'growth' && 'predicted' in row ? row.predicted[key] ?? false : false;
                               return (
                                 <td
                                   key={`ratio-secondary-val-${row.period}-${from}`}
