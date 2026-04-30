@@ -12,6 +12,7 @@ type DataRow = {
   day: Date;
   os: 'android' | 'ios' | 'other';
   country: string;
+  app: string;
   network: string;
   campaign: string;
   installs: number;
@@ -106,7 +107,7 @@ function heatmapStyle(
   };
 }
 
-function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'country' | 'network' | 'campaign'>): string[] {
+function optionValues(rows: DataRow[], field: keyof Pick<DataRow, 'os' | 'country' | 'app' | 'network' | 'campaign'>): string[] {
   return Array.from(new Set(rows.map((row) => String(row[field])))).sort((a, b) => a.localeCompare(b));
 }
 
@@ -437,6 +438,7 @@ export default function Page() {
   const [toDate, setToDate] = useState('');
   const [selectedOs, setSelectedOs] = useState<string[]>([]);
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
+  const [selectedApps, setSelectedApps] = useState<string[]>([]);
   const [selectedNetworks, setSelectedNetworks] = useState<string[]>([]);
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
   const [maturedOnly, setMaturedOnly] = useState(true);
@@ -491,6 +493,7 @@ export default function Page() {
           day,
           os: OS_MAP[row.store_type] ?? 'other',
           country: deriveCountry(row),
+          app: row.app?.trim() || 'unknown',
           network: row.channel?.trim() || 'unknown',
           campaign: row.campaign_network?.trim() || 'unknown',
           installs: parseOptionalNumber(row.installs),
@@ -577,9 +580,19 @@ export default function Page() {
 
   const networkOptions = useMemo(() => {
     const source = filteredByDate.filter(
-      (row) => matchesSelection(row.os, selectedOs) && matchesSelection(row.country, selectedCountries)
+      (row) =>
+        matchesSelection(row.os, selectedOs) &&
+        matchesSelection(row.country, selectedCountries) &&
+        matchesSelection(row.app, selectedApps)
     );
     return optionValues(source, 'network');
+  }, [filteredByDate, selectedOs, selectedCountries, selectedApps]);
+
+  const appOptions = useMemo(() => {
+    const source = filteredByDate.filter(
+      (row) => matchesSelection(row.os, selectedOs) && matchesSelection(row.country, selectedCountries)
+    );
+    return optionValues(source, 'app');
   }, [filteredByDate, selectedOs, selectedCountries]);
 
   const campaignOptions = useMemo(() => {
@@ -587,10 +600,11 @@ export default function Page() {
       (row) =>
         matchesSelection(row.os, selectedOs) &&
         matchesSelection(row.country, selectedCountries) &&
+        matchesSelection(row.app, selectedApps) &&
         matchesSelection(row.network, selectedNetworks)
     );
     return optionValues(source, 'campaign');
-  }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks]);
+  }, [filteredByDate, selectedOs, selectedCountries, selectedApps, selectedNetworks]);
 
   useEffect(() => {
     setSelectedOs((current) => current.filter((value) => osOptions.includes(value)));
@@ -599,6 +613,10 @@ export default function Page() {
   useEffect(() => {
     setSelectedCountries((current) => current.filter((value) => countryOptions.includes(value)));
   }, [countryOptions]);
+
+  useEffect(() => {
+    setSelectedApps((current) => current.filter((value) => appOptions.includes(value)));
+  }, [appOptions]);
 
   useEffect(() => {
     setSelectedNetworks((current) => current.filter((value) => networkOptions.includes(value)));
@@ -613,10 +631,11 @@ export default function Page() {
       (row) =>
         matchesSelection(row.os, selectedOs) &&
         matchesSelection(row.country, selectedCountries) &&
+        matchesSelection(row.app, selectedApps) &&
         matchesSelection(row.network, selectedNetworks) &&
         matchesSelection(row.campaign, selectedCampaigns)
     );
-  }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks, selectedCampaigns]);
+  }, [filteredByDate, selectedOs, selectedCountries, selectedApps, selectedNetworks, selectedCampaigns]);
 
   const heatmapRows = useMemo(() => {
     if (quickDatePreset === 'custom') {
@@ -661,9 +680,10 @@ export default function Page() {
       (row) =>
         matchesSelection(row.os, selectedOs) &&
         matchesSelection(row.country, selectedCountries) &&
+        matchesSelection(row.app, selectedApps) &&
         /organic/i.test(`${row.network} ${row.campaign}`)
     );
-  }, [filteredByDate, selectedOs, selectedCountries]);
+  }, [filteredByDate, selectedOs, selectedCountries, selectedApps]);
 
   const networkHistoricalRetentionRows = useMemo(() => {
     const activeNetworks =
@@ -675,10 +695,11 @@ export default function Page() {
       (row) =>
         matchesSelection(row.os, selectedOs) &&
         matchesSelection(row.country, selectedCountries) &&
+        matchesSelection(row.app, selectedApps) &&
         (activeNetworks.length === 0 || activeNetworks.includes(row.network)) &&
         (selectedCampaigns.length === 0 || !selectedCampaigns.includes(row.campaign))
     );
-  }, [filteredByDate, selectedOs, selectedCountries, selectedNetworks, selectedCampaigns, scopedRows]);
+  }, [filteredByDate, selectedOs, selectedCountries, selectedApps, selectedNetworks, selectedCampaigns, scopedRows]);
 
   const { orderedPeriods, periodCost, periodInstalls, periodCpi, periodRoas, periodLtv, predictedRoas, predictedMask, ratioSummary, periodJumpRatios, ratioDebugInfo, maxRoas, maturityDiagnostics } = useMemo(() => {
     const RATIO_PREDICTION_CONFIG = {
@@ -1685,6 +1706,8 @@ export default function Page() {
 
         <MultiSelect title="País" options={countryOptions} selected={selectedCountries} onChange={setSelectedCountries} searchable />
 
+        <MultiSelect title="App" options={appOptions} selected={selectedApps} onChange={setSelectedApps} searchable />
+
         <MultiSelect
           title="Network"
           options={networkOptions}
@@ -2314,4 +2337,3 @@ export default function Page() {
     </main>
   );
 }
-
