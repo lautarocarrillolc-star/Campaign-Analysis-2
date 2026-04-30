@@ -2227,7 +2227,7 @@ export default function Page() {
               ))}
               <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left} y2={chartPadding.top + plotHeight} className="axisLine" />
               <line x1={chartPadding.left} y1={chartPadding.top + plotHeight} x2={chartWidth - chartPadding.right} y2={chartPadding.top + plotHeight} className="axisLine" />
-              <text x={14} y={chartPadding.top + 6} className="axisLabel">{bottomChartMode === 'roas' ? 'ROAS' : 'Ratio'}</text>
+              <text x={12} y={chartPadding.top - 8} className="axisLabel">{bottomChartMode === 'roas' ? 'ROAS' : 'Ratio'}</text>
               {ratioYTicks.map(({ y, value }) => (
                 <text key={`ytick-${y}`} x={chartPadding.left - 8} y={y + 4} textAnchor="end" className="axisLabel">
                   {bottomChartMode === 'roas' ? `${(value * 100).toFixed(0)}%` : `${value.toFixed(2)}x`}
@@ -2286,19 +2286,7 @@ export default function Page() {
                 return (
                   <g key={`line-${series.key}`}>
                     <path d={d} stroke={`url(#series-grad-${seriesIndex})`} className="ratioLine roasAnimatedLine" />
-                    {points.map((point) => (
-                      <circle
-                        key={`${series.key}-${point.x}`}
-                        cx={point.x}
-                        cy={point.y}
-                        r={point.predicted ? 3.2 : 4}
-                        fill={point.predicted ? 'transparent' : series.color}
-                        stroke={series.color}
-                        className={point.predicted ? 'ratioPredictedPoint' : 'ratioPoint'}
-                      >
-                        <title>{`${series.label} | ${bottomChartMode === 'roas' ? normalizeCohortLabel(point.cohort) : point.cohort} | ${bottomChartMode === 'roas' ? `${(point.value * 100).toFixed(1)}%` : `${point.value.toFixed(3)}x`}${point.predicted ? ' (pred)' : ''}`}</title>
-                      </circle>
-                    ))}
+                    <title>{`${series.label} | ${bottomChartMode === 'roas' ? 'ROAS' : 'Ratio'} line`}</title>
                   </g>
                 );
               })}
