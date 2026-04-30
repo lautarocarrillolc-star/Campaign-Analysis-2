@@ -1307,13 +1307,13 @@ export default function Page() {
           const fromValue = revenues[from] ?? 0;
           const toValue = revenues[to] ?? 0;
           const realRatio = fromValue > 0 && toValue > 0 ? toValue / fromValue : null;
-          if (realRatio !== null && realRatio >= 1) {
+          if (realRatio !== null && realRatio > 0) {
             ratios[key] = realRatio;
             predicted[key] = false;
             continue;
           }
           const predictedRatio = enablePrediction ? fallbackRatios[key] ?? null : null;
-          ratios[key] = predictedRatio !== null && predictedRatio >= 1 ? predictedRatio : null;
+          ratios[key] = predictedRatio !== null && predictedRatio > 0 ? predictedRatio : null;
           predicted[key] = ratios[key] !== null;
         }
         return { period, ratios, predicted };
