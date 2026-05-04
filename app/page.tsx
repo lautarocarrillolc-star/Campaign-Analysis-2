@@ -20,6 +20,7 @@ type DataRow = {
   cost: number;
   revenueByCohort: Record<string, number>;
   retentionByCohort: Record<string, number>;
+  usersByCohort: Record<string, number | null>;
 };
 
 type HeatmapOrderBy = 'cohort_date' | 'os' | 'country' | 'network' | 'campaign';
@@ -433,6 +434,7 @@ export default function Page() {
   const [rows, setRows] = useState<DataRow[]>([]);
   const [availableCohorts, setAvailableCohorts] = useState<string[]>([]);
   const [availableRetentionCohorts, setAvailableRetentionCohorts] = useState<string[]>([]);
+  const [availableUserCohorts, setAvailableUserCohorts] = useState<string[]>([]);
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -456,7 +458,7 @@ export default function Page() {
   const [mainViewTab, setMainViewTab] = useState<'dashboard' | 'graficos'>('dashboard');
   const [heatmapOrderBy, setHeatmapOrderBy] = useState<HeatmapOrderBy>('cohort_date');
   const [quickDatePreset, setQuickDatePreset] = useState<QuickDatePreset>('last_3_months');
-  const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios' | 'retained'>('ltv');
+  const [secondaryTableMode, setSecondaryTableMode] = useState<'ltv' | 'ratios' | 'retained' | 'monthly_cohorts'>('ltv');
 
   useEffect(() => {
     document.body.dataset.theme = isDarkMode ? 'dark' : 'light';
@@ -469,6 +471,9 @@ export default function Page() {
       .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
     const retentionCohorts = fields
       .filter((field) => field.startsWith('retention_rate_'))
+      .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
+    const userCohorts = fields
+      .filter((field) => /^users?_m\d+$/i.test(field))
       .sort((a, b) => cohortSortValue(a) - cohortSortValue(b));
 
     const parsed = result.data
@@ -488,6 +493,11 @@ export default function Page() {
           const rawValue = parseOptionalNumber(row[cohort]);
           retentionByCohort[cohort] = rawValue > 1 ? rawValue / 100 : rawValue;
         });
+        const usersByCohort: Record<string, number | null> = {};
+        userCohorts.forEach((cohort) => {
+          const parsed = Number(row[cohort] ?? '');
+          usersByCohort[cohort] = Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+        });
 
         return {
           day,
@@ -506,7 +516,8 @@ export default function Page() {
           ),
           cost: parseNumber(row.cost),
           revenueByCohort,
-          retentionByCohort
+          retentionByCohort,
+          usersByCohort
         } satisfies DataRow;
       })
       .filter((row): row is DataRow => row !== null)
@@ -515,6 +526,7 @@ export default function Page() {
     setRows(parsed);
     setAvailableCohorts(cohorts);
     setAvailableRetentionCohorts(retentionCohorts);
+    setAvailableUserCohorts(userCohorts);
     setDataSourceLabel(label);
     setLoadError(null);
 
@@ -1270,6 +1282,33 @@ export default function Page() {
     networkHistoricalRetentionRows
   ]);
 
+  const monthlyCohortsRows = useMemo(() => {
+    const rowsByPeriod = new Map<string, Record<string, { sum: number; hasValue: boolean }>>();
+    for (const row of heatmapRows) {
+      const period = periodKey(row.day, granularity);
+      const current = rowsByPeriod.get(period) ?? {};
+      for (const cohort of availableUserCohorts) {
+        const value = row.usersByCohort[cohort];
+        const bucket = current[cohort] ?? { sum: 0, hasValue: false };
+        if (value !== null && Number.isFinite(value)) {
+          bucket.sum += value;
+          bucket.hasValue = true;
+        }
+        current[cohort] = bucket;
+      }
+      rowsByPeriod.set(period, current);
+    }
+    return orderedPeriods.map((period) => {
+      const current = rowsByPeriod.get(period) ?? {};
+      const users: Record<string, number | null> = {};
+      for (const cohort of availableUserCohorts) {
+        const bucket = current[cohort];
+        users[cohort] = bucket?.hasValue ? bucket.sum : null;
+      }
+      return { period, users };
+    });
+  }, [heatmapRows, granularity, orderedPeriods, availableUserCohorts]);
+
   const cohortPairs = useMemo(
     () => availableCohorts.slice(0, -1).map((cohort, index) => [cohort, availableCohorts[index + 1]] as const),
     [availableCohorts]
@@ -1896,6 +1935,8 @@ export default function Page() {
                   ? 'LTV Evolution (Revenue / Installs)'
                   : secondaryTableMode === 'ratios'
                     ? 'Ratio Evolution Table'
+                    : secondaryTableMode === 'monthly_cohorts'
+                      ? 'Monthly Cohorts (Users M0..M12)'
                     : 'Usuarios retenidos por cohort'}
               </p>
               <span className="tableContext">
@@ -1903,12 +1944,15 @@ export default function Page() {
                   ? 'Muestra cuánto revenue aporta cada install por ventana.'
                   : secondaryTableMode === 'ratios'
                     ? 'Compara el crecimiento entre ventanas o su peso en el lifetime.'
+                    : secondaryTableMode === 'monthly_cohorts'
+                      ? 'Usuarios observados por cohorte mensual; sin predicciones.'
                     : 'Resume usuarios retenidos por ventana y revenue restante para break-even.'}
               </span>
-              <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios' | 'retained')}>
+              <select value={secondaryTableMode} onChange={(event) => setSecondaryTableMode(event.target.value as 'ltv' | 'ratios' | 'retained' | 'monthly_cohorts')}>
                 <option value="ltv">LTV</option>
                 <option value="ratios">RATIOS</option>
                 <option value="retained">USUARIOS RETENIDOS</option>
+                <option value="monthly_cohorts">MONTHLY COHORTS</option>
               </select>
             </div>
             {secondaryTableMode === 'ltv' ? (
@@ -2024,6 +2068,32 @@ export default function Page() {
                   </table>
                 </div>
               </>
+            ) : secondaryTableMode === 'monthly_cohorts' ? (
+              <div className="heatmapScroll">
+                <table className="heatmap">
+                  <thead>
+                    <tr>
+                      <th>{heatmapRowLabel}</th>
+                      {availableUserCohorts.map((cohort) => (
+                        <th key={`users-${cohort}`}>{cohort.replace(/^users?_/, '').toUpperCase()}</th>
+                      ))}
+                      <th>Revenue left</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlyCohortsRows.map((row) => (
+                      <tr key={`monthly-cohort-${row.period}`}>
+                        <th>{row.period}</th>
+                        {availableUserCohorts.map((cohort) => {
+                          const value = row.users[cohort] ?? null;
+                          return <td key={`monthly-cohort-${row.period}-${cohort}`}>{value === null ? 'N/A' : Math.round(value).toLocaleString('en-US')}</td>;
+                        })}
+                        <td>{(retainedUsersData.periodRevenueLeft.get(row.period) ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <div className="heatmapScroll">
                 <table className="heatmap">
@@ -2325,3 +2395,4 @@ export default function Page() {
     </main>
   );
 }
+
