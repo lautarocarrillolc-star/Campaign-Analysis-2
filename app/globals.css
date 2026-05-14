@@ -407,6 +407,16 @@ input {
   color: #ef4444;
 }
 
+.emptyInfo {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 14px;
+  font-size: 13px;
+}
+
 .heatmapScroll {
   overflow: auto;
   border: 1px solid var(--border);
